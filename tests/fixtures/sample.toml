@@ -1,0 +1,111 @@
+# A Cargo-style manifest with a few pyproject habits mixed in
+# Every TOML construct mu highlights appears at least once
+
+[package]
+name = "orbit-tracker"
+version = "0.4.2"
+edition = "2024"
+authors = ["Ada Lovelace <ada@example.com>", 'Grace Hopper']
+description = """
+Tracks satellites in low orbit.
+Lines like key = "value" and # hashes stay inside this string.
+"""
+license-file = 'LICENSE.txt'
+keywords = [
+    "space",   # trailing comment in an array
+    "orbit",
+    "tle",
+]
+readme.file = "README.md"
+readme."content-type" = "text/markdown"
+
+[package.metadata.docs]
+all-features = true
+rustdoc-args = ['--cfg', 'docsrs']
+regex = '''\d{2,} apples # not a comment'''
+path = 'C:\Users\nodejs\templates'
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"], optional = false }
+tokio = { version = "1.38", default-features = false }
+"quoted-name" = "0.1"
+local = { path = "../local", "rename.me" = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest = "1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[[bin]]
+name = "orbit"
+path = "src/main.rs"
+
+[[bin]]
+name = "orbit-admin"
+path = "src/admin.rs"
+required-features = ["admin"]
+
+# Numbers in every notation
+[numbers]
+int = 42
+positive = +17
+negative = -5
+underscored = 1_000_000
+hex = 0xDEAD_beef
+octal = 0o755
+binary = 0b1101_0110
+float = 3.1415
+exponent = 6.626e-34
+signed-exponent = -2E+10
+both = 9_224_617.445_991_228_313
+infinity = inf
+negative-infinity = -inf
+not-a-number = nan
+
+# Dates and times
+[dates]
+offset = 1979-05-27T07:32:00Z
+offset-fraction = 1979-05-27T00:32:00.999999-07:00
+space-separated = 1979-05-27 07:32:00
+local-date = 1979-05-27
+local-time = 07:32:00
+local-time-fraction = 00:32:00.999999
+
+# Strings of every kind
+[strings]
+basic = "I'm a string with \"escapes\" and a \t tab"
+literal = 'No \escapes here'
+multi-literal = '''
+The first newline is trimmed.
+   All other whitespace = preserved # verbatim
+'''
+continued = """\
+    The quick brown \
+    fox jumps over \
+    the lazy dog.\
+    """
+quote-heavy = """Here are two quotation marks: "". Simple enough."""
+trailing-quotes = """She said "hi"."""""
+
+# Arrays, nested arrays and inline tables
+[arrays]
+integers = [1, 2, 3]
+nested = [[1, 2], ["a", 'b'], [1.5, true]]
+points = [
+    { x = 1, y = 2, z = 3 },
+    { x = 7, y = 8, z = 9 },
+]
+empty = []
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests", "integration"]
