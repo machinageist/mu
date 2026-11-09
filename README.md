@@ -1,12 +1,14 @@
 # mu
 
-**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, JSON, YAML and TOML. It reads a file or stdin, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, and syntax coloring for data. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.0 MB binary with no config file.
+**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, JSON, YAML and TOML. It reads a file, stdin or a URL, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, and syntax coloring for data. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.0 MB binary with no config file.
 
 ```sh
 mu README.md
-curl -s https://example.com/doc.md | mu
-curl -s https://example.com/ | mu          # HTML, detected from the content
-curl -s https://api.github.com/repos/rust-lang/rust | mu   # JSON, re-indented
+mu https://example.com/                    # HTML, with its images
+mu https://api.github.com/repos/rust-lang/rust   # JSON, re-indented
+mu https://github.com/machinageist/mu/blob/main/README.md   # the raw file, not the page
+mu -I https://example.com/                 # response headers as a table
+curl -s https://example.com/doc.md | mu    # pipes still work
 mu Cargo.toml
 mu -f rst < docs/index.txt
 mu -w 72 notes.org
@@ -27,9 +29,9 @@ Requires Rust 1.85+ (edition 2024). Linux and macOS (terminal width comes from t
 ## Usage
 
 ```text
-mu [OPTIONS] [FILE]
+mu [OPTIONS] [FILE | URL]
 
-Reads FILE, or stdin when FILE is - or absent.
+Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL.
 
   -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml
       --images <MODE>  auto, fetch or never (default: auto; fetch also downloads http(s) images)
@@ -41,11 +43,36 @@ Reads FILE, or stdin when FILE is - or absent.
   -V, --version
 ```
 
-- **Format:** `-f` if given, else the file extension, else a look at the content (this is how piped input such as `curl … | mu` is recognised), else Markdown. See [Formats](#formats).
+- **Format:** `-f` if given, else (for a URL) the response `Content-Type`, else the file or URL path extension, else a look at the content (this is how piped input such as `curl … | mu` is recognised), else Markdown. See [Formats](#formats).
 - **Width:** the terminal width (probed on stdout, then stderr, then stdin, so piping into a pager still sees the real width), capped at 100 columns for readable line lengths. Falls back to 80 when no terminal is attached. `-w` overrides both, minimum 20.
 - **Color:** on when stdout is a terminal and `NO_COLOR` is unset. Use `--color always` to keep styling when piping elsewhere.
 - **Paging:** with `auto`, output that would push the prompt off screen opens in the pager; shorter output prints straight to the terminal (like `less -F`). Output to a pipe or file is never paged, whatever the setting.
-- **Exit codes:** 0 success (including a closed pipe, e.g. `| head`), 1 read/write error, 2 usage error. Run with no arguments at an interactive prompt, it prints usage instead of waiting on stdin.
+- **Exit codes:** 0 success (including a closed pipe, e.g. `| head`), 1 read/write error, fetch failure or HTTP error status, 2 usage error. Run with no arguments at an interactive prompt, it prints usage instead of waiting on stdin.
+
+## URLs
+
+`mu <url>` fetches an `http://` or `https://` URL with the system `curl` and presents the response like a file. There is no HTTP or TLS code in mu itself; curl is run directly, without a shell, with the URL as a single argument after `--`. Redirects are followed, but only to http(s).
+
+```text
+  -H, --header <H>      Add a request header (repeatable)
+  -X, --request <M>     Use another request method
+  -d, --data <D>        Send data in the request body (repeatable)
+  -A, --user-agent <UA> Set the User-Agent (default: mu/VERSION)
+  -u, --user <U:P>      Send credentials
+  -k, --insecure        Skip TLS certificate checks
+  -i, --include         Show the response status and headers as a table, then the body
+  -I, --head            Show the response status and headers only
+      --timeout <SECS>  Give up after this long (connecting always times out after 10 s)
+      --curl <ARG>      Pass ARG straight to curl (repeatable), e.g. --curl --http1.1
+      --no-rewrite      Fetch the URL as typed
+```
+
+These options are a usage error without a URL. mu's `-w` is still the wrap width, not curl's write-out.
+
+- **Format:** `-f`, else the `Content-Type` (`text/plain` and `application/octet-stream` say nothing and are skipped), else the URL path's extension, else the content, else Markdown.
+- **Raw files:** a GitHub `…/blob/REF/PATH`, GitLab `…/-/blob/REF/PATH` or Gist page URL is fetched as the raw file it shows, so `mu` presents the document rather than the site's HTML around it. `--no-rewrite` turns this off.
+- **Images:** a fetched page loads its remote images as if `--images fetch` were given, resolving relative paths against the final URL. Pass `--images auto` or `never` to stop that.
+- **Errors:** for an HTTP status of 400 or more the body is still shown, then `mu: <url>: HTTP <code>` goes to stderr and mu exits 1. A failed connection prints curl's message and exits 1.
 
 ## Pager
 
@@ -88,7 +115,7 @@ An image that stands alone in its paragraph or block is drawn as a picture, with
 - **Aspect ratio:** mu reads the terminal's cell size in pixels and scales the image by one factor so it fits the text width and the screen height. Width and height shrink together, so the aspect ratio is exact to within half a cell. Images are never enlarged past their natural size. When a terminal does not report pixel sizes, mu assumes the common 1:2 cell.
 - **Drawing:** printed straight to kitty or Ghostty, the Kitty graphics protocol is used; in iTerm2 or WezTerm, iTerm2 inline images. Everywhere else, inside the pager and under tmux, images are drawn with 24-bit-color `▀` half blocks.
 - **Formats:** PNG, JPEG, GIF (first frame), WebP and SVG. SVG text is not rendered, and SVGs cannot load external files or URLs.
-- **Sources:** local paths, relative to the input file (or `--base`, which piped input needs), and `data:` URIs. Remote `http(s)` images load only with `--images fetch`, through the system `curl` with a 10 s timeout and a 20 MB cap. A page cannot make mu touch the network unless you ask.
+- **Sources:** local paths, relative to the input file (or `--base`, which piped input needs), and `data:` URIs. Remote `http(s)` images load only with `--images fetch`, which is the default when the input itself is a URL, through the system `curl` with a 10 s timeout and a 20 MB cap. A local file cannot make mu touch the network unless you ask.
 - **Fallback:** with `--images never`, color off, or anything that fails to load or decode, the `[image: alt]` text is shown as before.
 - **Limits:** sources over 20 MB, images over 64 megapixels or 16384 pixels on a side are refused before decoding.
 
@@ -174,6 +201,7 @@ Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and c
 - Content detection reads the first 8 KB. Short or unusual inputs may be shown as Markdown; use `-f`.
 - The pager has no search (`/`) yet.
 - Images: no EXIF orientation for JPEGs, no animated GIFs, no SVG text, and no images inline within a line of text.
+- URLs: no caching between runs, and charsets other than UTF-8 are shown with replacement characters. A repository's front page is fetched as HTML; point at the README's blob URL instead.
 - Links are not clickable (no OSC 8 hyperlinks); the URL is printed instead.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.
 - A table with too many columns to fit at 3 columns each overflows the width rather than becoming unreadable.
