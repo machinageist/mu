@@ -53,6 +53,39 @@ const EXTENSIONS: [(Format, &[&str]); 8] = [
     (Format::Toml, &["toml"]),
 ];
 
+// Media types from a Content-Type header, matched without parameters, case-insensitively
+const MEDIA_TYPES: [(Format, &[&str]); 8] = [
+    (Format::Markdown, &["text/markdown", "text/x-markdown"]),
+    (Format::Html, &["text/html", "application/xhtml+xml"]),
+    (Format::Rst, &["text/x-rst", "text/prs.fallenstein.rst"]),
+    (Format::Org, &["text/org", "text/x-org"]),
+    (Format::AsciiDoc, &["text/asciidoc", "text/x-asciidoc"]),
+    (
+        Format::Json,
+        &[
+            "application/json",
+            "application/x-ndjson",
+            "application/ld+json",
+        ],
+    ),
+    (
+        Format::Yaml,
+        &[
+            "application/yaml",
+            "application/x-yaml",
+            "text/yaml",
+            "text/x-yaml",
+        ],
+    ),
+    (Format::Toml, &["application/toml", "text/x-toml"]),
+];
+
+// Structured-syntax suffix for JSON media types such as application/problem+json
+const JSON_SUFFIX: &str = "+json";
+const URL_SCHEME_SEPARATOR: &str = "://";
+const URL_PATH_START: char = '/';
+const URL_PATH_ENDS: [char; 2] = ['?', '#'];
+
 impl Format {
     // Look up a --format value
     pub fn from_name(name: &str) -> Option<Format> {
@@ -70,6 +103,31 @@ impl Format {
             .iter()
             .find(|(_, exts)| exts.contains(&ext.as_str()))
             .map(|(format, _)| *format)
+    }
+
+    // Look up a Content-Type value such as `text/html; charset=utf-8`
+    pub fn from_media_type(content_type: &str) -> Option<Format> {
+        let essence = content_type
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        MEDIA_TYPES
+            .iter()
+            .find(|(_, types)| types.contains(&essence.as_str()))
+            .map(|(format, _)| *format)
+            .or_else(|| essence.ends_with(JSON_SUFFIX).then_some(Format::Json))
+    }
+
+    // Look up the extension of a URL's path, ignoring the host, query and fragment
+    pub fn from_url_path(url: &str) -> Option<Format> {
+        let after_scheme = url
+            .split_once(URL_SCHEME_SEPARATOR)
+            .map_or(url, |(_, rest)| rest);
+        let path = &after_scheme[after_scheme.find(URL_PATH_START)?..];
+        let path = path.split(URL_PATH_ENDS).next().unwrap_or_default();
+        Format::from_path(path)
     }
 
     // Canonical name, as shown in help and errors
@@ -148,6 +206,46 @@ mod tests {
         for (format, _) in NAMES {
             assert_eq!(Format::from_name(format.name()), Some(format));
         }
+    }
+
+    #[test]
+    fn media_types_resolve_with_parameters_and_suffixes() {
+        assert_eq!(
+            Format::from_media_type("text/html; charset=UTF-8"),
+            Some(Format::Html)
+        );
+        assert_eq!(
+            Format::from_media_type("Application/JSON"),
+            Some(Format::Json)
+        );
+        assert_eq!(
+            Format::from_media_type("application/problem+json"),
+            Some(Format::Json)
+        );
+        assert_eq!(
+            Format::from_media_type("text/markdown"),
+            Some(Format::Markdown)
+        );
+        assert_eq!(Format::from_media_type("text/plain"), None);
+        assert_eq!(Format::from_media_type("application/octet-stream"), None);
+    }
+
+    #[test]
+    fn url_paths_resolve_by_path_not_host() {
+        assert_eq!(Format::from_url_path("https://example.org"), None);
+        assert_eq!(Format::from_url_path("https://example.org/"), None);
+        assert_eq!(
+            Format::from_url_path("https://raw.githubusercontent.com/o/r/HEAD/README.md"),
+            Some(Format::Markdown)
+        );
+        assert_eq!(
+            Format::from_url_path("https://x.io/data.json?page=2#top"),
+            Some(Format::Json)
+        );
+        assert_eq!(
+            Format::from_url_path("https://x.io/notes.org"),
+            Some(Format::Org)
+        );
     }
 
     #[test]
