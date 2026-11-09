@@ -3,6 +3,7 @@ name = "mu"
 version = "0.1.0"
 edition = "2024"
 description = "Lightweight, fast Markdown renderer for the terminal"
+license = "MIT"
 
 [dependencies]
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }

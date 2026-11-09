@@ -127,3 +127,7 @@ Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and c
 - A table with too many columns to fit at 3 columns each overflows the width rather than becoming unreadable.
 - Very deep nesting stops shrinking content below 16 columns and overflows instead.
 - Definition lists, math and wiki links are not enabled; they render as plain text.
+
+## License
+
+MIT, see `LICENSE`.

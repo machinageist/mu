@@ -12,6 +12,7 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 - TOML: syntax coloring for tables, keys, strings (including multi-line), numbers, dates, booleans and comments
 
 ### Changed
+- Licensed under MIT
 - The project and binary are renamed from `mdread` to `mu`
 
 ## 0.1.0 - 2026-11-09
