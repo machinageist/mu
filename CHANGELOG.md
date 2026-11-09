@@ -4,6 +4,8 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+## 0.4.0 - 2026-11-09
+
 ### Added
 - `mu <url>` fetches an http(s) URL with the system `curl` and presents it. The format comes from `-f`, then the response `Content-Type`, then the URL path's extension, then the content
 - curl-like URL options: `-H`, `-X`, `-d`, `-A`, `-u`, `-k`, `-i` (status and headers as a table, then the body), `-I` (status and headers only), `--timeout`, and `--curl <ARG>` passed straight to curl
