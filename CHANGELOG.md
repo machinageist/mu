@@ -4,6 +4,8 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+## 0.2.0 - 2026-11-09
+
 ### Added
 - Detects the input format from the file extension, else from the content (including piped stdin), else falls back to Markdown
 - `-f`/`--format <NAME>` forces a format; an unknown name is a usage error (exit 2)
