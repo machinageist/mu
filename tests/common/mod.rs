@@ -15,19 +15,12 @@ const COLOR_WIDTHS: [usize; 5] = [30, 47, 60, 80, 100];
 
 // Render with color off at a fixed width
 pub fn plain(input: &str, format: Format, width: usize) -> String {
-    present(
-        input,
-        format,
-        &Options {
-            width,
-            color: false,
-        },
-    )
+    present(input, format, &Options::new(width, false))
 }
 
 // Render with color on at a fixed width
 pub fn colored(input: &str, format: Format, width: usize) -> String {
-    present(input, format, &Options { width, color: true })
+    present(input, format, &Options::new(width, true))
 }
 
 // Remove SGR sequences of the form ESC [ ... m

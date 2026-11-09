@@ -102,10 +102,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let options = Options {
-        width: resolve_width(args.width),
-        color: resolve_color(&args.color),
-    };
+    let options = Options::new(resolve_width(args.width), resolve_color(&args.color));
     let format = args.format.unwrap_or_else(|| detect(file, &input));
     let output = present(&input, format, &options);
 
@@ -124,7 +121,7 @@ fn main() -> ExitCode {
                     format,
                     &Options {
                         width,
-                        color: options.color,
+                        ..options.clone()
                     },
                 )
             })

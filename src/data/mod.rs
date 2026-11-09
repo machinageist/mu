@@ -112,20 +112,14 @@ mod tests {
 
     #[test]
     fn long_lines_wrap_behind_the_bar() {
-        let options = Options {
-            width: 10,
-            color: false,
-        };
+        let options = Options::new(10, false);
         let out = print(&plain_lines("0123456789abcdef\nx"), &options);
         assert_eq!(out, "0123456789\n┆ abcdef\nx\n");
     }
 
     #[test]
     fn controls_are_scrubbed() {
-        let options = Options {
-            width: 40,
-            color: true,
-        };
+        let options = Options::new(40, true);
         let out = print(&plain_lines("a\x1b[2Jb"), &options);
         assert!(!out.contains('\x1b'), "{out:?}");
     }

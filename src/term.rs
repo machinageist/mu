@@ -10,6 +10,8 @@ const PROBE_FDS: [libc::c_int; 3] = [libc::STDOUT_FILENO, libc::STDERR_FILENO, l
 pub struct Size {
     pub columns: usize,
     pub rows: usize,
+    // Window size in pixels, when the terminal reports it
+    pub pixels: Option<(usize, usize)>,
 }
 
 // Find the size of whichever standard stream is a terminal
@@ -31,5 +33,7 @@ pub fn fd_size(fd: libc::c_int) -> Option<Size> {
     (status == 0 && size.ws_col > 0 && size.ws_row > 0).then_some(Size {
         columns: usize::from(size.ws_col),
         rows: usize::from(size.ws_row),
+        pixels: (size.ws_xpixel > 0 && size.ws_ypixel > 0)
+            .then(|| (usize::from(size.ws_xpixel), usize::from(size.ws_ypixel))),
     })
 }

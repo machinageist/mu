@@ -9,6 +9,7 @@ use pulldown_cmark::{
 };
 use unicode_width::UnicodeWidthChar;
 
+use crate::image::ImageOptions;
 use crate::inline::{Atom, CONTROL_REPLACEMENT, Inline, Line, push_clean, text_width, wrap};
 use crate::style::{
     ATTR_BOLD, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, FG_CODE, FG_LINK, STYLE_ALERT_CAUTION,
@@ -62,9 +63,22 @@ pub(crate) const TAB_STOP: usize = 4;
 // Narrowest content column, even when deeply nested on a narrow terminal
 const MIN_CONTENT_WIDTH: usize = 16;
 
+#[derive(Clone, Debug, Default)]
 pub struct Options {
     pub width: usize,
     pub color: bool,
+    pub images: ImageOptions,
+}
+
+impl Options {
+    // Build text-only options at a width, with images off
+    pub fn new(width: usize, color: bool) -> Options {
+        Options {
+            width,
+            color,
+            images: ImageOptions::default(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -5,10 +5,12 @@
 
 mod data;
 mod format;
+mod image;
 mod inline;
 mod render;
 mod style;
 mod table;
 
 pub use format::{Format, detect, present, sniff};
+pub use image::{CellSize, ImageMode, ImageOptions, Protocol};
 pub use render::{Options, render};

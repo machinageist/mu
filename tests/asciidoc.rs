@@ -20,13 +20,7 @@ fn adoc(input: &str) -> String {
 
 // Render Markdown with color off at the test width
 fn markdown(input: &str) -> String {
-    render(
-        input,
-        &Options {
-            width: WIDTH,
-            color: false,
-        },
-    )
+    render(input, &Options::new(WIDTH, false))
 }
 
 #[test]
@@ -83,13 +77,7 @@ fn inline_markup_respects_word_boundaries() {
 #[test]
 fn inline_markup_matches_markdown_styles() {
     let ansi = colored("*b* _i_ `c`", Format::AsciiDoc, WIDTH);
-    let md = render(
-        "**b** *i* `c`",
-        &Options {
-            width: WIDTH,
-            color: true,
-        },
-    );
+    let md = render("**b** *i* `c`", &Options::new(WIDTH, true));
     assert_eq!(ansi, md);
 }
 

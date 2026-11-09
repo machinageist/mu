@@ -38,6 +38,7 @@ const ELLIPSIS: char = '…';
 const FALLBACK_SIZE: Size = Size {
     columns: 80,
     rows: 24,
+    pixels: None,
 };
 
 // Key bytes

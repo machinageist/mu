@@ -4,6 +4,9 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Changed
+- Library: `Options` gains an `images` field (`ImageOptions`, images off by default) and an `Options::new(width, color)` constructor
+
 ## 0.2.0 - 2026-11-09
 
 ### Added

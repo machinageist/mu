@@ -11,18 +11,12 @@ const ESC: char = '\x1b';
 
 // Render with color off at a fixed width
 fn plain(markdown: &str, width: usize) -> String {
-    render(
-        markdown,
-        &Options {
-            width,
-            color: false,
-        },
-    )
+    render(markdown, &Options::new(width, false))
 }
 
 // Render with color on at a fixed width
 fn colored(markdown: &str, width: usize) -> String {
-    render(markdown, &Options { width, color: true })
+    render(markdown, &Options::new(width, true))
 }
 
 // Remove SGR sequences of the form ESC [ ... m
