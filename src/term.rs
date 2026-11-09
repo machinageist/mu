@@ -6,13 +6,19 @@
 // File descriptors to ask, in order of preference
 const PROBE_FDS: [libc::c_int; 3] = [libc::STDOUT_FILENO, libc::STDERR_FILENO, libc::STDIN_FILENO];
 
-// Find the column count of whichever standard stream is a terminal
-pub fn columns() -> Option<usize> {
-    PROBE_FDS.into_iter().find_map(fd_columns)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Size {
+    pub columns: usize,
+    pub rows: usize,
+}
+
+// Find the size of whichever standard stream is a terminal
+pub fn size() -> Option<Size> {
+    PROBE_FDS.into_iter().find_map(fd_size)
 }
 
 // Ask one file descriptor for its window size
-fn fd_columns(fd: libc::c_int) -> Option<usize> {
+pub fn fd_size(fd: libc::c_int) -> Option<Size> {
     let mut size = libc::winsize {
         ws_row: 0,
         ws_col: 0,
@@ -22,5 +28,8 @@ fn fd_columns(fd: libc::c_int) -> Option<usize> {
     // SAFETY: TIOCGWINSZ writes one winsize into the pointer, which points at a live local of that type;
     // on a non-terminal fd the call fails with ENOTTY and writes nothing
     let status = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) };
-    (status == 0 && size.ws_col > 0).then_some(usize::from(size.ws_col))
+    (status == 0 && size.ws_col > 0 && size.ws_row > 0).then_some(Size {
+        columns: usize::from(size.ws_col),
+        rows: usize::from(size.ws_row),
+    })
 }

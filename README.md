@@ -1,12 +1,12 @@
 # mdread
 
-A small, fast Markdown renderer for the terminal. It reads a file or stdin, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks, links and footnotes. It is a single ~750 KB binary with three dependencies and no config file.
+A small, fast Markdown renderer for the terminal. It reads a file or stdin, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks, links and footnotes. Documents taller than the screen open in a built-in pager. It is a single ~750 KB binary with three dependencies and no config file.
 
 ```sh
 mdread README.md
 curl -s https://example.com/doc.md | mdread
 mdread -w 72 notes.md
-mdread --color always CHANGELOG.md | less -R
+mdread --paging never CHANGELOG.md | grep -i fix
 ```
 
 ## Install
@@ -26,13 +26,30 @@ Reads FILE, or stdin when FILE is - or absent.
 
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
+      --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
   -h, --help
   -V, --version
 ```
 
 - **Width:** the terminal width (probed on stdout, then stderr, then stdin, so piping into a pager still sees the real width), capped at 100 columns for readable line lengths. Falls back to 80 when no terminal is attached. `-w` overrides both, minimum 20.
-- **Color:** on when stdout is a terminal and `NO_COLOR` is unset. Use `--color always` when piping into `less -R`.
+- **Color:** on when stdout is a terminal and `NO_COLOR` is unset. Use `--color always` to keep styling when piping elsewhere.
+- **Paging:** with `auto`, output that would push the prompt off screen opens in the pager; shorter output prints straight to the terminal (like `less -F`). Output to a pipe or file is never paged, whatever the setting.
 - **Exit codes:** 0 success (including a closed pipe, e.g. `| head`), 1 read/write error, 2 usage error. Run with no arguments at an interactive prompt, it prints usage instead of waiting on stdin.
+
+## Pager
+
+Built in, no `less` needed. It takes over the screen (alternate screen, so your scrollback is untouched on exit) and reads keys from `/dev/tty`, so `curl … | mdread` pages too.
+
+| Keys | Action |
+|---|---|
+| `j` `↓` `Enter` / `k` `↑` | Scroll one line down / up |
+| `space` `f` `PgDn` `Ctrl-F` / `b` `PgUp` `Ctrl-B` | Scroll one page down / up |
+| `d` `Ctrl-D` / `u` `Ctrl-U` | Scroll half a page down / up |
+| `g` `Home` `<` / `G` `End` `>` | Jump to top / bottom |
+| Mouse wheel | Scroll (sent as arrow keys, so text selection still works) |
+| `q` `Ctrl-C` | Quit |
+
+The bottom row shows the file name, the visible line range, how far through you are, and a quit hint. Resizing the window re-renders the document at the new width and keeps your place proportionally; with `-w` the layout stays fixed and only the window changes. Lines wider than the window are clipped rather than wrapped.
 
 ## What renders
 
@@ -60,12 +77,14 @@ Reads FILE, or stdin when FILE is - or absent.
 - **Parser:** [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) with default features off and `simd` on (CommonMark plus GFM tables, strikethrough, task lists, footnotes, alerts). The other dependencies are `unicode-width` (CJK and emoji columns) and `libc` (one ioctl).
 - **Theme:** only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it.
 - **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mdread emits are its own SGR codes.
-- **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write. Styles are emitted lazily and every line closes its own style, so lines can be cut or paged independently.
+- **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write, or the pager. Styles are emitted lazily and every line closes its own style, so the pager can draw any window of lines on its own.
+- **Pager terminal handling:** raw mode via `termios`, a self-pipe for `SIGWINCH` so a resize can never be missed between a redraw and the next `poll()`, synchronized-output frames to avoid flicker, and the terminal restored on exit, on error and from a panic hook (release builds abort on panic, which skips destructors).
 
 ```text
 src/
-  main.rs    CLI: args, input, width/color detection, single write
-  term.rs    terminal width via TIOCGWINSZ
+  main.rs    CLI: args, input, width/color/paging decisions, single write
+  pager.rs   built-in pager: raw mode, keys, scrolling, resize, status bar
+  term.rs    terminal size via TIOCGWINSZ
   lib.rs     public API: render(&str, &Options) -> String
   render.rs  event walker: blocks, containers, lists, code frames
   inline.rs  styled word atoms, control-char scrubbing, word wrap
@@ -93,12 +112,12 @@ cargo clippy --all-targets
 cargo run --release -- -w 60 tests/fixtures/kitchen-sink.md
 ```
 
-`tests/render.rs` has exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output, every styled line resets before its newline, and no control character from the input reaches the output.
+`tests/render.rs` has exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output, every styled line resets before its newline, and no control character from the input reaches the output. `src/pager.rs` unit-tests key decoding, scroll clamping, resize behaviour and the status bar; the pager's terminal I/O was checked by hand in a pseudo-terminal.
 
 ## Known limits
 
 - No syntax highlighting in code blocks (deliberate: it would cost startup time and binary size).
-- No built-in pager; pipe into `less -R` with `--color always`.
+- The pager has no search (`/`) yet.
 - Links are not clickable (no OSC 8 hyperlinks); the URL is printed instead.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.
 - A table with too many columns to fit at 3 columns each overflows the width rather than becoming unreadable.

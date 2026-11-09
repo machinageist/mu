@@ -1,8 +1,10 @@
 // Author: machinageist
 // Date: 2026-11-09
 // Description: mdread CLI, reads Markdown from a file or stdin and prints it formatted for the terminal
-// Notes: Renders into one buffer and writes it in a single call; a closed pipe (`| head`) is not an error
+// Notes: Renders into one buffer, then either pages it or writes it in a single call;
+// a closed pipe (`| head`) is not an error
 
+mod pager;
 mod term;
 
 use std::fs;
@@ -19,12 +21,19 @@ Render Markdown in the terminal. Reads FILE, or stdin when FILE is - or absent.
 Options:
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
+      --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
   -h, --help           Show this help
-  -V, --version        Show the version";
+  -V, --version        Show the version
+
+Pager keys:
+  j k  Down Up  Enter   scroll a line        space b  PgDn PgUp   scroll a page
+  d u                   scroll half a page   g G  Home End        jump to top or bottom
+  q  Ctrl-C             quit";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PROGRAM: &str = "mdread";
 const STDIN_PATH: &str = "-";
+const STDIN_TITLE: &str = "stdin";
 const ENV_NO_COLOR: &str = "NO_COLOR";
 
 // Width defaults
@@ -36,7 +45,7 @@ const MIN_WIDTH: usize = 20;
 const EXIT_FAILURE: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 
-enum ColorMode {
+enum When {
     Auto,
     Always,
     Never,
@@ -45,7 +54,8 @@ enum ColorMode {
 struct Args {
     path: Option<String>,
     width: Option<usize>,
-    color: ColorMode,
+    color: When,
+    paging: When,
 }
 
 enum Command {
@@ -94,6 +104,34 @@ fn main() -> ExitCode {
     };
     let output = render(&input, &options);
 
+    // Page when wanted and the terminal can be taken over, otherwise fall through to a plain write
+    if should_page(&args.paging, &output)
+        && let Ok(session) = pager::Session::open()
+    {
+        let title = file.unwrap_or(STDIN_TITLE);
+        let mut width = options.width;
+        let mut relayout = |columns: usize| {
+            let next = auto_width(columns);
+            (args.width.is_none() && next != width).then(|| {
+                width = next;
+                render(
+                    &input,
+                    &Options {
+                        width,
+                        color: options.color,
+                    },
+                )
+            })
+        };
+        return match session.run(title, output, &mut relayout) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{PROGRAM}: {error}");
+                ExitCode::from(EXIT_FAILURE)
+            }
+        };
+    }
+
     let mut stdout = io::stdout().lock();
     match stdout
         .write_all(output.as_bytes())
@@ -113,7 +151,8 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
     let mut args = Args {
         path: None,
         width: None,
-        color: ColorMode::Auto,
+        color: When::Auto,
+        paging: When::Auto,
     };
     while let Some(arg) = raw.next() {
         let (flag, inline_value) = match arg.split_once('=') {
@@ -138,12 +177,13 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
                 let value = inline_value
                     .or_else(|| raw.next())
                     .ok_or("--color needs a value")?;
-                args.color = match value.as_str() {
-                    "auto" => ColorMode::Auto,
-                    "always" => ColorMode::Always,
-                    "never" => ColorMode::Never,
-                    _ => return Err(format!("invalid color mode '{value}'")),
-                };
+                args.color = parse_when(&value).ok_or(format!("invalid color mode '{value}'"))?;
+            }
+            "--paging" => {
+                let value = inline_value
+                    .or_else(|| raw.next())
+                    .ok_or("--paging needs a value")?;
+                args.paging = parse_when(&value).ok_or(format!("invalid paging mode '{value}'"))?;
             }
             _ if arg != STDIN_PATH && arg.starts_with('-') => {
                 return Err(format!("unknown option '{arg}'"));
@@ -153,6 +193,16 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
         }
     }
     Ok(Command::Render(args))
+}
+
+// Parse an auto/always/never value
+fn parse_when(value: &str) -> Option<When> {
+    match value {
+        "auto" => Some(When::Auto),
+        "always" => Some(When::Always),
+        "never" => Some(When::Never),
+        _ => None,
+    }
 }
 
 // Read the whole document from a file, or stdin when no path is given
@@ -172,18 +222,37 @@ fn read_input(path: Option<&str>) -> io::Result<String> {
 
 // Choose the wrap width from the flag or the terminal
 fn resolve_width(requested: Option<usize>) -> usize {
-    let width = requested.unwrap_or_else(|| {
-        term::columns().map_or(FALLBACK_WIDTH, |columns| columns.min(MAX_AUTO_WIDTH))
-    });
-    width.max(MIN_WIDTH)
+    match requested {
+        Some(width) => width.max(MIN_WIDTH),
+        None => term::size().map_or(FALLBACK_WIDTH, |size| auto_width(size.columns)),
+    }
+}
+
+// Fit the default width to a terminal: full width up to a readable cap
+fn auto_width(columns: usize) -> usize {
+    columns.clamp(MIN_WIDTH, MAX_AUTO_WIDTH)
+}
+
+// Decide whether output goes through the built-in pager
+fn should_page(mode: &When, output: &str) -> bool {
+    if !io::stdout().is_terminal() {
+        return false;
+    }
+    match mode {
+        When::Never => false,
+        When::Always => true,
+        // Like `less -F`: only page when the output would push the prompt off screen
+        When::Auto => term::size()
+            .is_some_and(|size| output.lines().nth(size.rows.saturating_sub(1)).is_some()),
+    }
 }
 
 // Decide whether to emit ANSI styling
-fn resolve_color(mode: &ColorMode) -> bool {
+fn resolve_color(mode: &When) -> bool {
     match mode {
-        ColorMode::Always => true,
-        ColorMode::Never => false,
-        ColorMode::Auto => {
+        When::Always => true,
+        When::Never => false,
+        When::Auto => {
             let no_color = std::env::var_os(ENV_NO_COLOR).is_some_and(|value| !value.is_empty());
             !no_color && io::stdout().is_terminal()
         }
