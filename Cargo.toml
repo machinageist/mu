@@ -4,6 +4,7 @@ version = "0.3.0"
 edition = "2024"
 description = "mu, the markup/markdown utility: a fast terminal presenter for Markdown, other markup and data formats"
 license = "MIT"
+repository = "https://github.com/machinageist/mu"
 
 [dependencies]
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }

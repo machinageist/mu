@@ -17,6 +17,8 @@ mu --paging never CHANGELOG.md | grep -i fix
 ## Install
 
 ```sh
+cargo install --git https://github.com/machinageist/mu
+# or, from a checkout
 cargo install --path .
 ```
 
