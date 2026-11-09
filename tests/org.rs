@@ -44,6 +44,8 @@ fn sniff_leaves_markdown_alone() {
     assert_ne!(mu::sniff(README), Format::Org);
     assert_ne!(mu::sniff("* one\n* two\n"), Format::Org);
     assert_ne!(mu::sniff("* one\n* [two](https://x.y)\n"), Format::Org);
+    // A bare `[[id]]` is an AsciiDoc anchor as often as an Org link
+    assert_ne!(mu::sniff("* one\n* two\n\n[[anchor]]\n"), Format::Org);
 }
 
 #[test]

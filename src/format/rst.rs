@@ -102,7 +102,11 @@ pub fn sniff(head: &str) -> bool {
     lines
         .iter()
         .any(|line| is_directive_line(line) || line.starts_with(TARGET_LINE))
-        || lines.windows(3).any(is_over_under_title)
+        || lines.windows(3).enumerate().any(|(index, window)| {
+            // An overline starts a block, so whatever precedes it is blank
+            let after_blank = index == 0 || lines[index - 1].trim().is_empty();
+            after_blank && is_over_under_title(window)
+        })
         || head.contains(EMBEDDED_LINK_END)
         || has_role(head)
 }

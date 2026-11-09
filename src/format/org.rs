@@ -67,6 +67,7 @@ const MIN_RULE_LENGTH: usize = 5;
 const LINK_OPEN: &str = "[[";
 const LINK_CLOSE: &str = "]]";
 const LINK_SPLIT: &str = "][";
+const SNIFF_LINK_MARKERS: [char; 3] = [':', '/', '.'];
 const FOOTNOTE_PREFIX: &str = "[fn:";
 const FOOTNOTE_CLOSE: char = ']';
 const FILE_PREFIX: &str = "file:";
@@ -88,9 +89,23 @@ pub fn sniff(head: &str) -> bool {
             return true;
         }
         has_heading |= heading_level(line).is_some();
-        has_link |= line.contains(LINK_OPEN) && line.contains(LINK_CLOSE);
+        has_link |= has_sniff_link(line);
     }
     has_heading && has_link
+}
+
+// Find an unmistakable Org link: described, or aimed at a URL or file
+// Notes: a bare `[[identifier]]` is also an AsciiDoc anchor, so it proves nothing
+fn has_sniff_link(line: &str) -> bool {
+    let Some(start) = line.find(LINK_OPEN) else {
+        return false;
+    };
+    let rest = &line[start + LINK_OPEN.len()..];
+    let Some(end) = rest.find(LINK_CLOSE) else {
+        return false;
+    };
+    let target = &rest[..end];
+    target.contains(LINK_SPLIT) || target.contains(SNIFF_LINK_MARKERS)
 }
 
 // Translate Org-mode into document events
