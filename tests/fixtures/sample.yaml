@@ -1,0 +1,125 @@
+%YAML 1.2
+---
+# CI workflow for a Rust crate
+name: CI
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+    paths-ignore: ['docs/**', "*.md"]  # docs-only changes skip CI
+  schedule:
+    - cron: "0 6 * * 1"   # every Monday at 06:00
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-D warnings # not a comment"
+  MSRV: 1.85
+  RETRIES: 0x1F
+  TIMEOUT: .inf
+  DEBUG: no
+  EMPTY: ~
+
+defaults: &defaults
+  runs-on: ubuntu-latest
+  timeout-minutes: 30
+  continue-on-error: false
+
+jobs:
+  test:
+    <<: *defaults
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        toolchain: [stable, beta, 1.85.0]
+        include:
+          - { os: ubuntu-latest, toolchain: nightly, experimental: true }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+      - name: Build and test
+        run: |
+          cargo build --locked
+          cargo test --release   # this hash is part of the script
+          echo "done: all green"
+      - name: Lint
+        run: >-
+          cargo clippy --all-targets
+          -- -D warnings
+      - name: Long description
+        env:
+          NOTE: 'it''s a single-quoted string with a # inside'
+          MULTI: "a double-quoted string
+            that continues on the next line"
+        run: echo "$NOTE"
+
+  release:
+    <<: *defaults
+    needs: [test]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package
+        run: cargo package --allow-dirty
+      - ? complex key
+        : complex value
+...
+---
+# A docker compose file as a second document
+services:
+  web:
+    image: "nginx:1.27"
+    ports:
+      - "8080:80"
+      - 8443:443
+    environment:
+      - NGINX_HOST=example.com
+      - NGINX_PORT=80
+    depends_on: [db, cache]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      retries: 3
+      start_period: 1.5e1
+  db:
+    image: postgres:16
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: !!str 12345
+      POSTGRES_DB: app
+      SHARED_BUFFERS: -128
+    command: >
+      postgres
+      -c max_connections=200
+  cache:
+    image: redis:7
+    restart: unless-stopped
+    labels: {tier: cache, "com.example.owner": ops, priority: 2}
+
+volumes:
+  db-data: {}
+  logs:
+    driver: local
+    driver_opts:
+      type: none
+      device: /var/log/app
+      o: bind
+
+x-notes:
+  - plain scalar item
+  - - nested
+    - sequence
+  - "quoted item"
+  - 'single'
+  - null
+  - TRUE
+  - .NaN
+  - -.inf

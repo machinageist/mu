@@ -97,8 +97,9 @@ impl Printer {
     }
 }
 
-// Split text into unstyled lines, the fallback for anything a highlighter cannot classify
-pub fn plain_lines(input: &str) -> Vec<StyledLine> {
+// Split text into unstyled lines, for printer tests
+#[cfg(test)]
+fn plain_lines(input: &str) -> Vec<StyledLine> {
     input
         .lines()
         .map(|line| vec![(Style::PLAIN, line.to_owned())])

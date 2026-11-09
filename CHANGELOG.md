@@ -10,6 +10,7 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 - JSON: valid JSON and NDJSON are re-indented and colored; invalid or truncated JSON is colored as written
 - Org-mode: headings (with `#+TITLE`, TODO keywords and tags), emphasis, links, lists and checkboxes, src/quote/example blocks, admonition blocks, tables and footnotes; drawers and planning lines are hidden
 - reStructuredText: titles, inline markup and links, lists, definition and field lists, literal and `code-block` blocks, admonitions, simple and grid tables, images
+- YAML: syntax coloring for keys, scalars, comments, anchors, tags and block scalars, with the text left exactly as written
 - TOML: syntax coloring for tables, keys, strings (including multi-line), numbers, dates, booleans and comments
 
 ### Changed
