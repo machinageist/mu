@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Field Notes &mdash; Terminal Rendering</title>
+  <link rel="stylesheet" href="/static/site.css">
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 42rem; }
+    pre > code { color: #c0ffee; }
+    .hidden::after { content: "STYLE TEXT SHOULD NOT SHOW"; }
+  </style>
+  <script>
+    window.analytics = { track: function (e) { console.log("SCRIPT TEXT SHOULD NOT SHOW", e); } };
+    if (1 < 2 && 3 > 2) { document.title = "</p>"; }
+  </script>
+</head>
+<body>
+  <!-- Site navigation: COMMENT TEXT SHOULD NOT SHOW -->
+  <nav class="site-nav">
+    <ul>
+      <li><a href="/">Home</a></li>
+      <li><a href="/notes/">Notes</a></li>
+      <li><a href="/about/">About</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <article>
+      <header>
+        <h1>Rendering HTML in the Terminal</h1>
+        <p class="byline">By <strong>machinageist</strong> &middot; 9 November 2026 &middot; 6&nbsp;min read</p>
+      </header>
+
+      <p>
+        Most of what <code>curl</code> hands back is HTML. Reading it raw is
+        tiring, so this page walks through how each element is shown &hellip;
+        with <em>emphasis</em>, <b>bold</b>, <i>italics</i>, <del>deleted</del>
+        and <s>struck</s> text, plus <kbd>Ctrl</kbd>+<kbd>C</kbd> to quit.
+      </p>
+
+      <p>Line one of an address<br>
+      Line two of an address<br/>
+      Line three</p>
+
+      <h2 id="lists">Lists</h2>
+      <ul>
+        <li>Tight item with a <a href="https://example.com/docs">link</a></li>
+        <li>Second item
+          <ul>
+            <li>Nested item</li>
+            <li>Another nested item</li>
+          </ul>
+        </li>
+        <li>Unclosed item
+        <li>Item after the unclosed one
+      </ul>
+
+      <ol start="3">
+        <li>Third step</li>
+        <li>Fourth step</li>
+      </ol>
+
+      <ol>
+        <li><p>A loose item with a paragraph.</p><p>And a second paragraph.</p></li>
+        <li><p>Another loose item.</p></li>
+      </ol>
+
+      <h2>Quotes &amp; rules</h2>
+      <blockquote>
+        <p>&ldquo;Simplicity is prerequisite for reliability.&rdquo;</p>
+        <p>&mdash; Edsger W. Dijkstra</p>
+      </blockquote>
+
+      <hr>
+
+      <h3>Code</h3>
+      <p>A block with its whitespace kept exactly:</p>
+<pre><code class="language-rust">fn main() {
+    let x = 1 &lt; 2;
+        println!("{x} &amp; done");
+}
+</code></pre>
+
+      <pre>
+plain   pre   text
+  indented</pre>
+
+      <h3>Table</h3>
+      <table>
+        <caption>Supported formats</caption>
+        <thead>
+          <tr><th>Format</th><th>Kind</th><th>Extensions</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>HTML</td><td>document</td><td><code>.html</code>, <code>.htm</code></td></tr>
+          <tr><td>JSON</td><td>data</td><td><code>.json</code></td></tr>
+          <tr><td>TOML<td>data<td><code>.toml</code>
+          <tr><td colspan="2">Markdown (fallback)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Definitions</h3>
+      <dl>
+        <dt>Presenter</dt>
+        <dd>Turns markup into styled terminal text.</dd>
+        <dt>Sniffing</dt>
+        <dd>Guessing a format from the first 8&#160;KB of input.</dd>
+        <dd>Conservative: when unsure, the answer is Markdown.</dd>
+      </dl>
+
+      <h3>Entities</h3>
+      <p>Copyright &copy; 2026, Registered&reg;, Trademark&trade;,
+        &laquo;guillemets&raquo;, &lsquo;single&rsquo;, &bull; bullet,
+        2 &times; 3, dash&ndash;range, &#65;&#x42;&#X43;, and &unknown; stays.</p>
+
+      <figure>
+        <img src="/img/terminal.png" alt="A terminal showing rendered HTML">
+        <figcaption>The presenter at work.</figcaption>
+      </figure>
+
+      <p>An image with no alt: <img src="/img/spacer.gif"></p>
+
+      <form action="/subscribe" method="post">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="INPUT TEXT SHOULD NOT SHOW">
+        <select name="freq"><option>OPTION TEXT SHOULD NOT SHOW</option></select>
+        <textarea name="note">TEXTAREA TEXT SHOULD NOT SHOW</textarea>
+        <button type="submit">BUTTON TEXT SHOULD NOT SHOW</button>
+      </form>
+
+      <noscript><p>NOSCRIPT TEXT SHOULD NOT SHOW</p></noscript>
+      <template><p>TEMPLATE TEXT SHOULD NOT SHOW</p></template>
+      <svg width="10" height="10"><title>SVG TEXT SHOULD NOT SHOW</title><circle r="4"/></svg>
+      <iframe src="/embed">IFRAME TEXT SHOULD NOT SHOW</iframe>
+
+      <div class="callout">
+        A loose div with <span class="x">inline</span> text
+        <div>and a nested div</div>
+        after which text continues.
+      </div>
+
+      <section>
+        <h4>Misnested markup</h4>
+        <p>This <b>bold <i>both</b> italic</i> text survives, and so does
+        <p>an unclosed paragraph followed by another
+        <p>and a third.
+      </section>
+
+      <h5>Small heading</h5>
+      <h6>Smallest heading</h6>
+    </article>
+  </main>
+
+  <footer>
+    <p>&copy; 2026 Field Notes. <a href="/feed.xml">RSS</a></p>
+  </footer>
+  <script src="/static/app.js"></script>
+  <script>document.write("LATE SCRIPT TEXT SHOULD NOT SHOW");</script>
+</body>
+</html>

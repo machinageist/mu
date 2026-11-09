@@ -8,6 +8,7 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 - Detects the input format from the file extension, else from the content (including piped stdin), else falls back to Markdown
 - `-f`/`--format <NAME>` forces a format; an unknown name is a usage error (exit 2)
 - JSON: valid JSON and NDJSON are re-indented and colored; invalid or truncated JSON is colored as written
+- HTML: pages from a file or `curl` are shown as documents (headings, paragraphs, lists, quotes, `pre` code, tables, links, images); scripts, styles and the head are hidden and entities decoded
 - Org-mode: headings (with `#+TITLE`, TODO keywords and tags), emphasis, links, lists and checkboxes, src/quote/example blocks, admonition blocks, tables and footnotes; drawers and planning lines are hidden
 - reStructuredText: titles, inline markup and links, lists, definition and field lists, literal and `code-block` blocks, admonitions, simple and grid tables, images
 - YAML: syntax coloring for keys, scalars, comments, anchors, tags and block scalars, with the text left exactly as written
