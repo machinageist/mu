@@ -146,6 +146,12 @@ fn yaml_documents_are_sniffed() {
     assert_eq!(sniff(manifest), Format::Yaml);
     let header = "# lint config\n\nfirst: false\nrules:\n  - a\n";
     assert_eq!(sniff(header), Format::Yaml);
+    let workflow = "name: ci\non: push\njobs:\n  b:\n    runs-on: x\n";
+    assert_eq!(sniff(workflow), Format::Yaml);
+    let marked = "---\n- a: 1\n- b: 2\n- c: 3\n";
+    assert_eq!(sniff(marked), Format::Yaml);
+    let ansible = "- name: setup\n  hosts: all\n  tasks:\n    - name: x\n      apt: name=git\n";
+    assert_eq!(sniff(ansible), Format::Yaml);
 }
 
 #[test]
@@ -154,7 +160,19 @@ fn markdown_and_prose_are_not_yaml() {
     let prose = "Note: this is a sentence.\nAnother: line of prose here.\n";
     let list = "# Shopping\n\n## Dairy\n\n- milk\n- eggs\n- butter: salted\n";
     let paragraph = "key: value\nother: thing\nmore: stuff\n\nThen a paragraph of prose.\n";
-    for input in [KITCHEN_SINK, README, front_matter, prose, list, paragraph] {
+    let todo = "# Todo\n\n- buy milk\n- call bob\n- fix: the sink\n";
+    let notes = "# Notes\n- Status: done\n- Owner: me\n- Due: friday\n";
+    let inputs = [
+        KITCHEN_SINK,
+        README,
+        front_matter,
+        prose,
+        list,
+        paragraph,
+        todo,
+        notes,
+    ];
+    for input in inputs {
         assert_ne!(sniff(input), Format::Yaml, "{input:?}");
     }
 }

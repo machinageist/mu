@@ -61,6 +61,9 @@ pub fn sniff(head: &str) -> bool {
     let mut shaped = 0;
     let mut keys = 0;
     let mut prev_blank = true;
+    // Structure Markdown bullets lack: a top-level key, a leading marker, or an item mapping
+    let mut evidence = false;
+    let mut item_key_column = None;
     for (index, raw) in lines.iter().enumerate() {
         let line = raw.trim_end();
         if line.trim().is_empty() {
@@ -96,12 +99,24 @@ pub fn sniff(head: &str) -> bool {
             prev_blank = false;
             continue;
         }
-        significant += 1;
-        let has_key = spans.iter().any(|(style, text)| is_sniff_key(*style, text));
+        let key_column = key_column(&spans);
+        let has_key = key_column.is_some();
         let structural = first.is_some_and(|(style, text)| {
             (*style == STYLE_DATA_PUNCT && STRUCTURE_STARTS.iter().any(|s| text.starts_with(s)))
                 || (*style == STYLE_DATA_META && text.starts_with(DIRECTIVE))
         });
+        let opens_document = first.is_some_and(|(style, text)| {
+            (*style == STYLE_DATA_PUNCT && text.starts_with(DOC_START))
+                || (*style == STYLE_DATA_META && text.starts_with(DIRECTIVE))
+        });
+        // A sibling key aligned under the key of a `- key:` item proves a mapping in a sequence
+        evidence |= (significant == 0 && opens_document)
+            || key_column == Some(0)
+            || (key_column == Some(indent) && item_key_column == Some(indent));
+        if has_key && key_column != Some(indent) {
+            item_key_column = key_column;
+        }
+        significant += 1;
         if has_key {
             keys += 1;
         }
@@ -115,6 +130,7 @@ pub fn sniff(head: &str) -> bool {
     }
     significant >= MIN_SIGNIFICANT_LINES
         && keys > 0
+        && evidence
         && shaped * 100 >= significant * MIN_SHAPED_PERCENT
 }
 
@@ -140,6 +156,18 @@ fn is_heading(content: &str, first_line: bool) -> bool {
     let hashes = content.len() - content.trim_start_matches(COMMENT).len();
     let shaped = (1..=MAX_HEADING_LEVEL).contains(&hashes) && content[hashes..].starts_with(' ');
     shaped && !(first_line && hashes == 1)
+}
+
+// Find the column of the line's first YAML-shaped key
+fn key_column(spans: &StyledLine) -> Option<usize> {
+    let mut column = 0;
+    for (style, text) in spans {
+        if is_sniff_key(*style, text) {
+            return Some(column);
+        }
+        column += text.len();
+    }
+    None
 }
 
 // Accept a key span as YAML-shaped only when it is quoted or has no inner spaces
