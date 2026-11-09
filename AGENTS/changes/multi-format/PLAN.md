@@ -1,13 +1,13 @@
 # Plan: multi-format presenter
 
-One task per commit. Verification gate for every task:
+One task per commit, or one `--no-ff` merge per agent-built format. Each merge adds its `CHANGELOG.md` line under Unreleased (see `CONTRIBUTING.md`). This change ships as **0.2.0**: it is MINOR because it adds features and renames the binary, which is breaking below 1.0. Verification gate for every task:
 
 ```sh
 cargo test --release && cargo clippy --all-targets -- -D warnings
 ```
 
 ## 0. Housekeeping
-Commit the pending `mdread` → `mu` rename. Restore `.gitignore` (`/target`).
+Commit the pending `mdread` → `mu` rename. Restore `.gitignore` (`/target`). ✅ done
 → verify: `git status` is clean apart from the spec docs
 
 ## 1. Format plumbing (no behaviour change)
@@ -45,3 +45,7 @@ Adornment headings, inline markup, lists, `::` literal blocks, `code-block`/`not
 ## 9. Docs
 README (usage, formats table, detection), FEATURE_SPEC updated to the shipped reality, and the binary size checked.
 → verify: `cargo build --release && ls -l target/release/mu`
+
+## 10. Release 0.2.0
+Follow the release steps in `CONTRIBUTING.md`: bump to 0.2.0, date the changelog section, commit `Release 0.2.0`, tag `v0.2.0`.
+→ verify: `cargo run --release -- --version` prints `mu 0.2.0`; `git describe` prints `v0.2.0`

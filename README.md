@@ -114,6 +114,10 @@ cargo run --release -- -w 60 tests/fixtures/kitchen-sink.md
 
 `tests/render.rs` has exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output, every styled line resets before its newline, and no control character from the input reaches the output. `src/pager.rs` unit-tests key decoding, scroll clamping, resize behaviour and the status bar; the pager's terminal I/O was checked by hand in a pseudo-terminal.
 
+## Versioning
+
+Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and commit rules are in `CONTRIBUTING.md`.
+
 ## Known limits
 
 - No syntax highlighting in code blocks (deliberate: it would cost startup time and binary size).
