@@ -4,9 +4,6 @@
 // Notes: The library default is ImageMode::Never so `render` and `present` stay pure text
 // with no file or network access unless a caller opts in
 
-// TODO(images task 4): remove once the renderer calls load and draw
-#![allow(dead_code)]
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImageMode {
     // Show alt text only, as before images were supported
@@ -60,6 +57,10 @@ pub struct ImageOptions {
     pub max_rows: Option<usize>,
 }
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 pub(crate) mod base64;
 mod codec;
 mod encode;
@@ -112,10 +113,29 @@ impl Picture {
     }
 }
 
+// Decoded images by source and base, so a pager re-layout never reads or downloads twice
+// Cache key is the source as written plus the base it resolved against
+type CacheKey = (String, Option<String>);
+
+thread_local! {
+    static CACHE: RefCell<HashMap<CacheKey, Option<Rc<Picture>>>> = RefCell::new(HashMap::new());
+}
+
+// Load an image once per process, remembering failures too
+pub(crate) fn load_cached(src: &str, options: &ImageOptions) -> Option<Rc<Picture>> {
+    let key = (src.to_owned(), options.base.clone());
+    if let Some(hit) = CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let loaded = load(src, options).map(Rc::new);
+    CACHE.with(|cache| cache.borrow_mut().insert(key, loaded.clone()));
+    loaded
+}
+
 // Load and decode an image source, or None when images are off or anything fails
-pub(crate) fn load(src: &str, options: &ImageOptions) -> Option<Picture> {
+fn load(src: &str, options: &ImageOptions) -> Option<Picture> {
     let bytes = source::fetch(src, options)?;
-    if let Some(image) = codec::decode(&bytes) {
+    if let Some(image) = codec::decode(&bytes).filter(Rgba::is_valid) {
         return Some(Picture::Raster(image));
     }
     svg::Svg::parse(&bytes).map(Picture::Vector)

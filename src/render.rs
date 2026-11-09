@@ -9,14 +9,14 @@ use pulldown_cmark::{
 };
 use unicode_width::UnicodeWidthChar;
 
-use crate::image::ImageOptions;
+use crate::image::{self, ImageMode, ImageOptions};
 use crate::inline::{Atom, CONTROL_REPLACEMENT, Inline, Line, push_clean, text_width, wrap};
 use crate::style::{
     ATTR_BOLD, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, FG_CODE, FG_LINK, STYLE_ALERT_CAUTION,
     STYLE_ALERT_IMPORTANT, STYLE_ALERT_NOTE, STYLE_ALERT_TIP, STYLE_ALERT_WARNING, STYLE_BULLET,
     STYLE_CODE_LABEL, STYLE_FOOTNOTE, STYLE_FRAME, STYLE_FRONT_MATTER, STYLE_HEADINGS, STYLE_HTML,
-    STYLE_IMAGE, STYLE_TABLE_HEAD, STYLE_TASK_DONE, STYLE_TASK_TODO, STYLE_URL, Style, paint,
-    paint_repeat,
+    STYLE_IMAGE, STYLE_IMAGE_CAPTION, STYLE_TABLE_HEAD, STYLE_TASK_DONE, STYLE_TASK_TODO,
+    STYLE_URL, Style, paint, paint_repeat,
 };
 use crate::table::{self, Cell, Table};
 
@@ -128,6 +128,16 @@ struct Renderer<'o> {
     table: Option<Table>,
     link_urls: Vec<Option<String>>,
     image_mark: usize,
+    images: Vec<ImageSpan>,
+}
+
+// An image in the current inline block: its source, alt text and atom range
+struct ImageSpan {
+    src: String,
+    alt: String,
+    start: usize,
+    end: usize,
+    open: bool,
 }
 
 // Render a Markdown document into terminal-ready text
@@ -254,6 +264,7 @@ impl<'o> Renderer<'o> {
             table: None,
             link_urls: Vec::new(),
             image_mark: 0,
+            images: Vec::new(),
         }
     }
 
@@ -346,6 +357,7 @@ impl<'o> Renderer<'o> {
             Tag::Table(aligns) => {
                 self.begin_block();
                 self.inline.clear();
+                self.images.clear();
                 self.table = Some(Table::new(aligns));
             }
             Tag::TableHead => {
@@ -362,7 +374,7 @@ impl<'o> Renderer<'o> {
                 dest_url,
                 ..
             } => self.start_link(link_type, &dest_url),
-            Tag::Image { .. } => self.start_image(),
+            Tag::Image { dest_url, .. } => self.start_image(&dest_url),
             Tag::TableRow
             | Tag::Superscript
             | Tag::Subscript
@@ -485,6 +497,11 @@ impl<'o> Renderer<'o> {
             return;
         }
         self.inline_open = false;
+        if self.draw_standalone_image() {
+            self.inline.clear();
+            self.images.clear();
+            return;
+        }
         let has_text = self
             .inline
             .atoms
@@ -501,6 +518,7 @@ impl<'o> Renderer<'o> {
             self.emit_lines(&lines);
         }
         self.inline.clear();
+        self.images.clear();
     }
 
     // Mark the enclosing list loose when a paragraph sits directly in one of its items
@@ -667,6 +685,7 @@ impl<'o> Renderer<'o> {
             self.out.push('\n');
         }
         self.inline.clear();
+        self.images.clear();
         self.inline_open = false;
         self.pending_blank = true;
     }
@@ -804,6 +823,7 @@ impl<'o> Renderer<'o> {
             self.out.push('\n');
         }
         self.inline.clear();
+        self.images.clear();
         self.pending_blank = true;
     }
 
@@ -814,6 +834,9 @@ impl<'o> Renderer<'o> {
             return;
         }
         self.open_inline();
+        if let Some(image) = self.images.last_mut().filter(|image| image.open) {
+            image.alt.push_str(text);
+        }
         self.inline.text(text);
     }
 
@@ -884,9 +907,16 @@ impl<'o> Renderer<'o> {
         }
     }
 
-    // Open an image, which renders as its alt text
-    fn start_image(&mut self) {
+    // Open an image, which renders as its alt text unless it can be drawn on its own
+    fn start_image(&mut self, src: &str) {
         self.open_inline();
+        self.images.push(ImageSpan {
+            src: src.to_owned(),
+            alt: String::new(),
+            start: self.inline.atoms.len(),
+            end: self.inline.atoms.len(),
+            open: true,
+        });
         self.inline.push_style(STYLE_IMAGE);
         self.inline.word(IMAGE_OPEN);
         self.inline.space();
@@ -904,5 +934,54 @@ impl<'o> Renderer<'o> {
             self.inline.word(IMAGE_CLOSE);
         }
         self.inline.pop_style();
+        let end = self.inline.atoms.len();
+        if let Some(image) = self.images.last_mut() {
+            image.end = end;
+            image.open = false;
+        }
+    }
+
+    // Draw the block's only image as a picture with an alt caption, if it stands alone and loads
+    fn draw_standalone_image(&mut self) -> bool {
+        let options = &self.options.images;
+        if !self.options.color || options.mode == ImageMode::Never {
+            return false;
+        }
+        let [image] = self.images.as_slice() else {
+            return false;
+        };
+        let alone = self.inline.atoms.iter().enumerate().all(|(index, atom)| {
+            !matches!(atom, Atom::Text { .. }) || (image.start..image.end).contains(&index)
+        });
+        if !alone || image.open {
+            return false;
+        }
+        let Some(picture) = image::load_cached(&image.src, options) else {
+            return false;
+        };
+        let lines = image::draw(&picture, self.avail(), options);
+        if lines.is_empty() {
+            return false;
+        }
+        let alt = image.alt.trim().to_owned();
+        for line in lines {
+            self.line_prefix();
+            self.out.push_str(&line);
+            self.out.push('\n');
+        }
+        if !alt.is_empty() {
+            let mut caption = Inline::default();
+            caption.begin(STYLE_IMAGE_CAPTION);
+            caption.text(&alt);
+            let lines = wrap(
+                &caption.atoms,
+                &caption.arena,
+                self.avail(),
+                caption.base,
+                self.options.color,
+            );
+            self.emit_lines(&lines);
+        }
+        true
     }
 }

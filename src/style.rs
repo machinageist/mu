@@ -118,6 +118,7 @@ pub const FG_CODE: u8 = FG_YELLOW;
 pub const FG_LINK: u8 = FG_BLUE;
 pub const STYLE_URL: Style = Style::new(ATTR_DIM, FG_DEFAULT);
 pub const STYLE_IMAGE: Style = Style::new(ATTR_ITALIC, FG_MAGENTA);
+pub const STYLE_IMAGE_CAPTION: Style = Style::new(ATTR_DIM | ATTR_ITALIC, FG_DEFAULT);
 pub const STYLE_HTML: Style = Style::new(ATTR_DIM, FG_DEFAULT);
 pub const STYLE_FOOTNOTE: Style = Style::new(0, FG_CYAN);
 
