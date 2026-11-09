@@ -51,7 +51,10 @@ fn sniff_leaves_markdown_alone() {
 #[test]
 fn title_becomes_h1_and_shifts_headings() {
     let out = org("#+TITLE: Notes\n#+AUTHOR: machinageist\n#+OPTIONS: toc:nil\n* Intro\nBody.\n");
-    assert_eq!(out, "Notes\n═════\n\nmachinageist\n\nIntro\n─────\n\nBody.\n");
+    assert_eq!(
+        out,
+        "Notes\n═════\n\nmachinageist\n\nIntro\n─────\n\nBody.\n"
+    );
 }
 
 #[test]
