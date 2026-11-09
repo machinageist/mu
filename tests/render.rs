@@ -3,7 +3,7 @@
 // Description: End-to-end rendering tests with exact expected output plus layout invariants
 // Notes: Exact cases run with color off; invariants sweep widths over the kitchen-sink fixture
 
-use mdread::{Options, render};
+use mu::{Options, render};
 use unicode_width::UnicodeWidthStr;
 
 const KITCHEN_SINK: &str = include_str!("fixtures/kitchen-sink.md");

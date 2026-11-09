@@ -1,7 +1,7 @@
 // Author: machinageist
 // Date: 2026-11-09
 // Description: Terminal size lookup through the TIOCGWINSZ ioctl
-// Notes: Probes stdout, then stderr, then stdin so `mdread x.md | less -R` still sees the real width
+// Notes: Probes stdout, then stderr, then stdin so `mu x.md | less -R` still sees the real width
 
 // File descriptors to ask, in order of preference
 const PROBE_FDS: [libc::c_int; 3] = [libc::STDOUT_FILENO, libc::STDERR_FILENO, libc::STDIN_FILENO];

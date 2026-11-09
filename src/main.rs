@@ -1,6 +1,6 @@
 // Author: machinageist
 // Date: 2026-11-09
-// Description: mdread CLI, reads Markdown from a file or stdin and prints it formatted for the terminal
+// Description: mu CLI, reads Markdown from a file or stdin and prints it formatted for the terminal
 // Notes: Renders into one buffer, then either pages it or writes it in a single call;
 // a closed pipe (`| head`) is not an error
 
@@ -11,10 +11,10 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
-use mdread::{Options, render};
+use mu::{Options, render};
 
 const USAGE: &str = "\
-Usage: mdread [OPTIONS] [FILE]
+Usage: mu [OPTIONS] [FILE]
 
 Render Markdown in the terminal. Reads FILE, or stdin when FILE is - or absent.
 
@@ -31,7 +31,7 @@ Pager keys:
   q  Ctrl-C             quit";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const PROGRAM: &str = "mdread";
+const PROGRAM: &str = "mu";
 const STDIN_PATH: &str = "-";
 const STDIN_TITLE: &str = "stdin";
 const ENV_NO_COLOR: &str = "NO_COLOR";
@@ -82,7 +82,7 @@ fn main() -> ExitCode {
         }
     };
 
-    // Nothing to read: a bare `mdread` at a prompt should explain itself, not hang
+    // Nothing to read: a bare `mu` at a prompt should explain itself, not hang
     if args.path.is_none() && io::stdin().is_terminal() {
         eprintln!("{USAGE}");
         return ExitCode::from(EXIT_USAGE);

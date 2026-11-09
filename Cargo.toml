@@ -1,5 +1,5 @@
 [package]
-name = "mdread"
+name = "mu"
 version = "0.1.0"
 edition = "2024"
 description = "Lightweight, fast Markdown renderer for the terminal"

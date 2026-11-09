@@ -1,6 +1,6 @@
 // Author: machinageist
 // Date: 2026-11-09
-// Description: mdread library, renders Markdown to ANSI-styled terminal text
+// Description: mu library, renders Markdown to ANSI-styled terminal text
 // Notes: The binary is a thin CLI around `render`; tests drive it with color off
 
 mod inline;

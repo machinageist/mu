@@ -1,12 +1,12 @@
-# mdread
+# mu
 
 A small, fast Markdown renderer for the terminal. It reads a file or stdin, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks, links and footnotes. Documents taller than the screen open in a built-in pager. It is a single ~750 KB binary with three dependencies and no config file.
 
 ```sh
-mdread README.md
-curl -s https://example.com/doc.md | mdread
-mdread -w 72 notes.md
-mdread --paging never CHANGELOG.md | grep -i fix
+mu README.md
+curl -s https://example.com/doc.md | mu
+mu -w 72 notes.md
+mu --paging never CHANGELOG.md | grep -i fix
 ```
 
 ## Install
@@ -20,7 +20,7 @@ Requires Rust 1.85+ (edition 2024). Linux and macOS (terminal width comes from t
 ## Usage
 
 ```text
-mdread [OPTIONS] [FILE]
+mu [OPTIONS] [FILE]
 
 Reads FILE, or stdin when FILE is - or absent.
 
@@ -38,7 +38,7 @@ Reads FILE, or stdin when FILE is - or absent.
 
 ## Pager
 
-Built in, no `less` needed. It takes over the screen (alternate screen, so your scrollback is untouched on exit) and reads keys from `/dev/tty`, so `curl … | mdread` pages too.
+Built in, no `less` needed. It takes over the screen (alternate screen, so your scrollback is untouched on exit) and reads keys from `/dev/tty`, so `curl … | mu` pages too.
 
 | Keys | Action |
 |---|---|
@@ -76,7 +76,7 @@ The bottom row shows the file name, the visible line range, how far through you 
 
 - **Parser:** [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) with default features off and `simd` on (CommonMark plus GFM tables, strikethrough, task lists, footnotes, alerts). The other dependencies are `unicode-width` (CJK and emoji columns) and `libc` (one ioctl).
 - **Theme:** only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it.
-- **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mdread emits are its own SGR codes.
+- **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mu emits are its own SGR codes.
 - **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write, or the pager. Styles are emitted lazily and every line closes its own style, so the pager can draw any window of lines on its own.
 - **Pager terminal handling:** raw mode via `termios`, a self-pipe for `SIGWINCH` so a resize can never be missed between a redraw and the next `poll()`, synchronized-output frames to avoid flicker, and the terminal restored on exit, on error and from a panic hook (release builds abort on panic, which skips destructors).
 
