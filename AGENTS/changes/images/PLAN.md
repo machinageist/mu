@@ -29,8 +29,8 @@ A standalone image paragraph becomes an image block behind container gutters, wi
 
 ## 5. CLI and pager (lead) ✅
 `--images`, `--base`, protocol detection (`KITTY_WINDOW_ID`/`TERM=xterm-kitty`/Ghostty, `TERM_PROGRAM=iTerm.app`/WezTerm), half-blocks in the pager, re-scale on resize from cached RGBA.
-→ verify: CLI tests; manual check in kitty/iTerm2/Terminal.app recorded in the PR notes
+→ verify: CLI tests; manual check in machinageist's terminal passed 2026-11-09
 
-## 6. Docs and release
+## 6. Docs and release ✅
 README image section, FEATURE_SPEC invariants updated (24-bit color and graphics escapes for images), CHANGELOG, binary size recorded, release 0.3.0 per `CONTRIBUTING.md`.
 → verify: `mu --version` prints 0.3.0, and `git describe` prints v0.3.0
