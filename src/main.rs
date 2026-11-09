@@ -11,7 +11,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
-use mu::{Format, Options, detect, present};
+use mu::{CellSize, Format, ImageMode, ImageOptions, Options, Protocol, detect, present};
 
 const USAGE: &str = "\
 Usage: mu [OPTIONS] [FILE]
@@ -25,6 +25,9 @@ Options:
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
+      --images <MODE>  auto, fetch or never (default: auto, local files and data: URIs only;
+                       fetch also downloads http(s) images with curl)
+      --base <DIR|URL> Resolve relative image paths here (default: the file's folder)
   -h, --help           Show this help
   -V, --version        Show the version
 
@@ -38,6 +41,18 @@ const PROGRAM: &str = "mu";
 const STDIN_PATH: &str = "-";
 const STDIN_TITLE: &str = "stdin";
 const ENV_NO_COLOR: &str = "NO_COLOR";
+
+// Terminals that speak a native graphics protocol, read from the environment
+const ENV_TERM: &str = "TERM";
+const ENV_TERM_PROGRAM: &str = "TERM_PROGRAM";
+const ENV_KITTY_WINDOW: &str = "KITTY_WINDOW_ID";
+const ENV_TMUX: &str = "TMUX";
+const KITTY_TERMS: [&str; 2] = ["xterm-kitty", "xterm-ghostty"];
+const KITTY_PROGRAMS: [&str; 1] = ["ghostty"];
+const ITERM_PROGRAMS: [&str; 2] = ["iTerm.app", "WezTerm"];
+
+// Rows kept free under the tallest image so it fits on one screen with the prompt
+const IMAGE_ROW_MARGIN: usize = 2;
 
 // Width defaults
 const FALLBACK_WIDTH: usize = 80;
@@ -60,6 +75,8 @@ struct Args {
     width: Option<usize>,
     color: When,
     paging: When,
+    images: ImageMode,
+    base: Option<String>,
 }
 
 enum Command {
@@ -102,8 +119,12 @@ fn main() -> ExitCode {
         }
     };
 
-    let options = Options::new(resolve_width(args.width), resolve_color(&args.color));
+    let options = Options {
+        images: resolve_images(&args, file),
+        ..Options::new(resolve_width(args.width), resolve_color(&args.color))
+    };
     let format = args.format.unwrap_or_else(|| detect(file, &input));
+    // Half-blocks first: they work in the pager, and decide whether paging is needed
     let output = present(&input, format, &options);
 
     // Page when wanted and the terminal can be taken over, otherwise fall through to a plain write
@@ -135,6 +156,16 @@ fn main() -> ExitCode {
         };
     }
 
+    // Straight to the terminal, a native graphics protocol draws sharper pictures
+    let protocol = native_protocol();
+    let output = if protocol != Protocol::HalfBlock && options.images.mode != ImageMode::Never {
+        let mut native = options.clone();
+        native.images.protocol = protocol;
+        present(&input, format, &native)
+    } else {
+        output
+    };
+
     let mut stdout = io::stdout().lock();
     match stdout
         .write_all(output.as_bytes())
@@ -157,6 +188,8 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
         width: None,
         color: When::Auto,
         paging: When::Auto,
+        images: ImageMode::Auto,
+        base: None,
     };
     while let Some(arg) = raw.next() {
         let (flag, inline_value) = match arg.split_once('=') {
@@ -197,6 +230,19 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
                     .ok_or("--paging needs a value")?;
                 args.paging = parse_when(&value).ok_or(format!("invalid paging mode '{value}'"))?;
             }
+            "--images" => {
+                let value = inline_value
+                    .or_else(|| raw.next())
+                    .ok_or("--images needs a value")?;
+                args.images =
+                    parse_image_mode(&value).ok_or(format!("invalid images mode '{value}'"))?;
+            }
+            "--base" => {
+                let value = inline_value
+                    .or_else(|| raw.next())
+                    .ok_or("--base needs a value")?;
+                args.base = Some(value);
+            }
             _ if arg != STDIN_PATH && arg.starts_with('-') => {
                 return Err(format!("unknown option '{arg}'"));
             }
@@ -205,6 +251,60 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
         }
     }
     Ok(Command::Render(args))
+}
+
+// Parse an --images value
+fn parse_image_mode(value: &str) -> Option<ImageMode> {
+    match value {
+        "auto" => Some(ImageMode::Auto),
+        "fetch" => Some(ImageMode::Fetch),
+        "never" => Some(ImageMode::Never),
+        _ => None,
+    }
+}
+
+// Build image settings from the flags and the terminal's cell geometry, half-blocks by default
+fn resolve_images(args: &Args, file: Option<&str>) -> ImageOptions {
+    let size = term::size();
+    let cell = size
+        .and_then(|size| {
+            let (width, height) = size.pixels?;
+            let cell = CellSize {
+                width: u32::try_from(width / size.columns).ok()?,
+                height: u32::try_from(height / size.rows).ok()?,
+            };
+            (cell.width > 0 && cell.height > 0).then_some(cell)
+        })
+        .unwrap_or_default();
+    ImageOptions {
+        mode: args.images,
+        // A file path is fine as a base: relative images resolve against its folder
+        base: args.base.clone().or_else(|| file.map(str::to_owned)),
+        cell,
+        protocol: Protocol::HalfBlock,
+        max_rows: size.map(|size| size.rows.saturating_sub(IMAGE_ROW_MARGIN).max(1)),
+    }
+}
+
+// Pick a native graphics protocol when stdout is a terminal known to support one
+fn native_protocol() -> Protocol {
+    let env = |key: &str| std::env::var(key).unwrap_or_default();
+    // Inside tmux the escapes would need passthrough wrapping, so stay with half-blocks
+    if !io::stdout().is_terminal() || std::env::var_os(ENV_TMUX).is_some() {
+        return Protocol::HalfBlock;
+    }
+    let term = env(ENV_TERM);
+    let program = env(ENV_TERM_PROGRAM);
+    if std::env::var_os(ENV_KITTY_WINDOW).is_some()
+        || KITTY_TERMS.contains(&term.as_str())
+        || KITTY_PROGRAMS.contains(&program.as_str())
+    {
+        Protocol::Kitty
+    } else if ITERM_PROGRAMS.contains(&program.as_str()) {
+        Protocol::Iterm
+    } else {
+        Protocol::HalfBlock
+    }
 }
 
 // Parse an auto/always/never value

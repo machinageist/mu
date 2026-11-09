@@ -50,3 +50,34 @@ fn unknown_format_is_a_usage_error() {
     let (code, _) = run(&["-f", "docx"], "x");
     assert_eq!(code, EXIT_USAGE);
 }
+
+const IMAGE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images");
+const IMAGE_MARKDOWN: &str = "![sun](wide.svg)\n";
+const HALF_BLOCK: char = '▀';
+
+#[test]
+fn invalid_images_mode_is_a_usage_error() {
+    let (code, _) = run(&["--images", "sometimes"], "x");
+    assert_eq!(code, EXIT_USAGE);
+}
+
+#[test]
+fn piped_markdown_draws_images_relative_to_base() {
+    let (code, out) = run(&["--color", "always", "--base", IMAGE_DIR], IMAGE_MARKDOWN);
+    assert_eq!(code, 0);
+    assert!(out.contains(HALF_BLOCK), "{out:?}");
+}
+
+#[test]
+fn images_never_and_color_never_keep_alt_text() {
+    let (_, never) = run(
+        &["--color=always", "--images=never", "--base", IMAGE_DIR],
+        IMAGE_MARKDOWN,
+    );
+    assert!(
+        !never.contains(HALF_BLOCK) && never.contains("[image: sun]"),
+        "{never:?}"
+    );
+    let (_, plain) = run(&["--color", "never", "--base", IMAGE_DIR], IMAGE_MARKDOWN);
+    assert_eq!(plain, "[image: sun]\n");
+}

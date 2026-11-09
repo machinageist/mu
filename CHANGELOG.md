@@ -4,6 +4,12 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Added
+- Images: a picture standing alone in a document (HTML `<img>`/`<figure>`, Markdown `![]()` on its own line, RST/AsciiDoc image blocks, Org image links) is drawn in the terminal with its exact aspect ratio and the alt text as a caption. PNG, JPEG, GIF (first frame), WebP and SVG
+- Images draw with the Kitty graphics protocol (kitty, Ghostty) or iTerm2 inline images (iTerm2, WezTerm) when printing straight to those terminals, and as 24-bit-color half blocks in the pager and everywhere else
+- `--images <auto|fetch|never>`: `auto` loads local files and `data:` URIs, `fetch` also downloads http(s) images with the system `curl`, `never` keeps alt text
+- `--base <DIR|URL>` sets where relative image paths resolve; defaults to the input file's folder
+
 ### Changed
 - Library: `Options` gains an `images` field (`ImageOptions`, images off by default) and an `Options::new(width, color)` constructor
 
