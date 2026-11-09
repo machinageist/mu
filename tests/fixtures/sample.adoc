@@ -1,0 +1,152 @@
+= Widget Forge
+Jane Doe <jane@example.com>
+v1.4.0, 2026-10-01
+:toc: left
+:project: widget-forge
+:version: 1.4.0
+:repo: https://github.com/example/widget-forge
+:icons: font
+
+// This comment line never shows up
+
+image::docs/logo.png[Widget Forge logo]
+
+*Widget Forge* is a _small_ tool for building `{project}` widgets from plain text.
+It runs anywhere, ships as one binary, and the current release is *{version}*.
+The {unknown} reference stays as written, and snake_case_names stay plain.
+
+toc::[]
+
+== Installation
+
+Grab a release from {repo}/releases[the releases page] or build from source:
+
+[source,shell]
+----
+cargo install widget-forge
+widget-forge --version
+----
+
+NOTE: The minimum supported Rust version is 1.85.
+
+.Building from a checkout
+[source,rust]
+----
+fn main() {
+    println!("hello, widgets");
+}
+----
+
+=== Platform support
+
+[cols="2,1,3",options="header"]
+|===
+|Platform |Tier |Notes
+
+|Linux |1 |Tested on every commit
+|macOS |1 |Intel and Apple silicon
+|Windows |2 |Best effort, see <<windows-notes,the Windows notes>>
+|===
+
+== Usage
+
+Run the tool with a single input file:
+
+ widget-forge build widgets.txt
+ widget-forge check widgets.txt
+
+Options are read from the command line first, then from the config file.
+Press kbd:[Ctrl+C] to stop a running build. +
+That line break above was a hard break.
+
+=== Commands
+
+* `build` compiles widgets
+** writes into `target/` by default
+** respects `+--out+` when given
+* `check` validates without writing
+* `fmt` reformats the input
+
+. Write a widget file
+. Run `widget-forge check`
+.. Fix any reported errors
+.. Run the check again
+. Run `widget-forge build`
+
+=== Progress
+
+* [x] Parser
+* [x] Renderer
+* [ ] Plugin system
+
+=== Configuration
+
+build.out:: Output directory for compiled widgets.
+build.jobs:: Number of parallel jobs.
+Defaults to the CPU count.
+log.level::
+  One of `error`, `warn`, `info` or `debug`.
+
+[TIP]
+====
+Keep the config file next to the widget sources so relative paths resolve
+the way you expect.
+====
+
+WARNING: Version 2 changes the file format. Pin to *1.x* if you depend on it.
+
+[CAUTION]
+Deleting the cache directory forces a full rebuild.
+
+== Examples
+
+.A minimal widget
+====
+A widget file is a list of `name = value` lines.
+Comments start with `#`.
+====
+
+.Sample output
+....
+widget-forge 1.4.0
+  built 12 widgets in 0.4s
+....
+
+****
+Sidebar: the format was inspired by INI files, but stricter about quoting.
+****
+
+[quote, Ada Lovelace, Notes on the Analytical Engine]
+____
+The engine might compose elaborate and scientific pieces of music.
+____
+
+////
+This whole block is a comment and never appears.
+It can span many lines.
+////
+
+== Links and references
+
+* Bare links work: https://example.com/docs.
+* So do named links: link:CONTRIBUTING.adoc[the contributing guide].
+* Cross references read naturally: see <<installation>> or xref:usage[how to use it].
+* Mail the maintainers at mailto:team@example.com[the team].
+* Inline images like image:badge.svg[build status] show their alt text.
+
+[[windows-notes]]
+=== Windows notes
+
+Paths use backslashes, so escape them in config files: `C:\\widgets`.
+Water is H~2~O and two to the tenth is 2^10^.
+Some text is #highlighted# for emphasis, and **un**constrained bold works mid-word.
+
+include::CHANGELOG.adoc[]
+
+'''
+
+<<<
+
+== License
+
+Widget Forge is released under the MIT license. See `LICENSE` for details.
