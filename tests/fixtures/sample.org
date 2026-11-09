@@ -1,0 +1,131 @@
+#+TITLE: Homelab Notes
+#+AUTHOR: machinageist
+#+DATE: 2026-11-09
+#+OPTIONS: toc:nil num:nil
+#+STARTUP: overview
+
+# This comment line never renders
+
+* Overview                                                     :infra:notes:
+:PROPERTIES:
+:CUSTOM_ID: overview
+:CREATED:  [2026-11-01 Sun]
+:END:
+
+These are *working notes* for the homelab rebuild. Paths like /usr/bin/env and
+words like snake_case_name or a*b*c stay as written, while /italic/, _underline_,
++struck+, =verbatim= and ~code~ are styled.
+
+See [[https://orgmode.org][the Org manual]] or just [[https://example.com/docs]] for
+details.[fn:1]
+
+-----
+
+* TODO [#A] Rebuild the router                                         :network:
+SCHEDULED: <2026-11-12 Thu> DEADLINE: <2026-11-15 Sun>
+:LOGBOOK:
+CLOCK: [2026-11-08 Sat 10:00]--[2026-11-08 Sat 11:30] =>  1:30
+:END:
+
+Steps to follow, in order:
+
+1. Back up the current config
+2. Flash the new firmware
+   - Check the checksum first
+   - Keep the old image around
+3) Restore VLANs
+
+Shopping list:
+
+- [X] Patch cables
+- [ ] Rack shelf
+- [-] Labels, partly bought
++ Spare fan
+
+** DONE Write the firewall rules
+CLOSED: [2026-11-07 Sat 18:02]
+
+#+BEGIN_SRC sh :results output
+# allow ssh from the lab VLAN only
+nft add rule inet filter input ip saddr 10.0.20.0/24 tcp dport 22 accept
+nft list ruleset | grep -c accept
+#+END_SRC
+
+** Glossary
+
+- VLAN :: a virtual LAN that splits one switch into many
+- MTU :: the largest frame a link will carry
+- Trunk port ::
+  A port that carries tagged traffic for several VLANs.
+
+* Inventory
+
+| Host    | Role      | RAM (GB) |
+|---------+-----------+----------|
+| pve-01  | Proxmox   |       64 |
+| nas-01  | Storage   |       16 |
+| pi-dns  | Pi-hole   |        1 |
+|---------+-----------+----------|
+| Total   |           |       81 |
+#+TBLFM: @5$3=vsum(@2..@4)
+
+A table with no rule treats its first row as the head:
+
+| Port | Service |
+| 22   | ssh     |
+| 443  | https   |
+
+* Snippets
+
+#+begin_example
+$ ssh pve-01
+Last login: Sun Nov  8 10:00:00 2026
+#+end_example
+
+Fixed-width output also renders as code:
+
+: $ uptime
+:  10:01:02 up 12 days,  3:04,  1 user
+:
+
+#+BEGIN_QUOTE
+The network is reliable, said nobody who ran one.
+It fails *exactly* when you need it.
+#+END_QUOTE
+
+#+BEGIN_VERSE
+Packets in the dark
+Dropped without a single word
+TTL expires
+#+END_VERSE
+
+#+BEGIN_WARNING
+Never expose the Proxmox web UI to the internet.
+#+END_WARNING
+
+#+BEGIN_TIP
+Use =ssh -J= to hop through the bastion.
+#+END_TIP
+
+#+BEGIN_COMMENT
+This block is private and never renders.
+#+END_COMMENT
+
+#+BEGIN_CENTER
+Centered text renders as an ordinary paragraph.
+#+END_CENTER
+
+** Diagram
+
+[[file:diagrams/network.png]]
+
+*** Deeper levels
+**** Level four
+***** Level five
+****** Level six
+******* Level seven caps at six
+
+* Footnotes
+
+[fn:1] The Org manual covers every construct used here, and plenty
+that is not.

@@ -8,6 +8,7 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 - Detects the input format from the file extension, else from the content (including piped stdin), else falls back to Markdown
 - `-f`/`--format <NAME>` forces a format; an unknown name is a usage error (exit 2)
 - JSON: valid JSON and NDJSON are re-indented and colored; invalid or truncated JSON is colored as written
+- Org-mode: headings (with `#+TITLE`, TODO keywords and tags), emphasis, links, lists and checkboxes, src/quote/example blocks, admonition blocks, tables and footnotes; drawers and planning lines are hidden
 - TOML: syntax coloring for tables, keys, strings (including multi-line), numbers, dates, booleans and comments
 
 ### Changed
