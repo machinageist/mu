@@ -138,20 +138,11 @@ pub const STYLE_ALERT_WARNING: Style = Style::new(ATTR_BOLD, FG_YELLOW);
 pub const STYLE_ALERT_CAUTION: Style = Style::new(ATTR_BOLD, FG_RED);
 
 // Theme: data formats (JSON, YAML, TOML)
-// TODO(multi-format): drop the dead_code allows once the data highlighters land
-#[allow(dead_code)]
 pub const STYLE_DATA_KEY: Style = Style::new(ATTR_BOLD, FG_BLUE);
-#[allow(dead_code)]
 pub const STYLE_DATA_STRING: Style = Style::new(0, FG_GREEN);
-#[allow(dead_code)]
 pub const STYLE_DATA_NUMBER: Style = Style::new(0, FG_MAGENTA);
-#[allow(dead_code)]
 pub const STYLE_DATA_LITERAL: Style = Style::new(0, FG_YELLOW);
-#[allow(dead_code)]
 pub const STYLE_DATA_COMMENT: Style = Style::new(ATTR_DIM | ATTR_ITALIC, FG_DEFAULT);
-#[allow(dead_code)]
 pub const STYLE_DATA_PUNCT: Style = Style::new(ATTR_DIM, FG_DEFAULT);
-#[allow(dead_code)]
 pub const STYLE_DATA_SECTION: Style = Style::new(ATTR_BOLD, FG_CYAN);
-#[allow(dead_code)]
 pub const STYLE_DATA_META: Style = Style::new(0, FG_CYAN);
