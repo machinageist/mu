@@ -1,0 +1,473 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>mu Logic Maps</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a single reading column of chart sections, with a sticky index of the seven maps */
+:root {
+  --bg: #f5f7f9;
+  --surface: #ffffff;
+  --fg: #16202a;
+  --muted: #5a6876;
+  --line: #d6dee6;
+  --accent: #0b7f8f;
+  --accent-soft: #e2f2f4;
+  --planned: #9a5b00;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1418; --surface: #151d23; --fg: #e3e9ee; --muted: #93a3b1;
+    --line: #2a3640; --accent: #4fc3d0; --accent-soft: #15323a; --planned: #e0a24a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1418; --surface: #151d23; --fg: #e3e9ee; --muted: #93a3b1;
+  --line: #2a3640; --accent: #4fc3d0; --accent-soft: #15323a; --planned: #e0a24a;
+  color-scheme: dark;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+}
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto;
+  height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg);
+}
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+header.top { display: grid; gap: 8px; margin-bottom: 20px; }
+.eyebrow {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--accent);
+}
+h1 {
+  font-family: var(--font-mono); font-weight: 600; font-size: 30px;
+  margin: 0; text-wrap: balance;
+}
+h1 .rule { display: block; color: var(--accent); font-weight: 400; letter-spacing: -0.02em; overflow: hidden; white-space: nowrap; }
+.lede { color: var(--muted); max-width: 65ch; margin: 0; }
+nav.index {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--bg); border-bottom: 1px solid var(--line);
+  padding-block: 10px; margin-bottom: 28px;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+nav.index a {
+  font-family: var(--font-mono); font-size: 13px; color: var(--fg);
+  text-decoration: none; padding: 4px 10px; border: 1px solid var(--line);
+  border-radius: 4px; background: var(--surface);
+}
+nav.index a:hover, nav.index a:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+nav.index a .tag { color: var(--planned); }
+section.map { display: grid; gap: 12px; margin-bottom: 44px; scroll-margin-top: 64px; }
+section.map h2 {
+  font-family: var(--font-mono); font-size: 19px; font-weight: 600; margin: 0;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; text-wrap: balance;
+}
+section.map h2::after {
+  content: ""; flex: 1 1 40px; border-bottom: 1px solid var(--line); transform: translateY(-4px);
+}
+.status {
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--planned); border: 1px solid currentColor; border-radius: 3px; padding: 1px 6px;
+}
+.purpose { margin: 0; max-width: 70ch; color: var(--muted); }
+.chart {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+  padding: 16px; overflow-x: auto; min-width: 0;
+}
+.chart pre.mermaid { margin: 0; background: transparent; font-family: var(--font-body); }
+.trace { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 20px; margin: 0; padding: 0; list-style: none; }
+.trace li { min-width: 0; font-size: 13.5px; }
+.trace code {
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--accent);
+  background: var(--accent-soft); padding: 1px 5px; border-radius: 3px; word-break: break-word;
+}
+table.rules { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.table-scroll { overflow-x: auto; min-width: 0; }
+table.rules th, table.rules td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.rules th { font-family: var(--font-mono); font-weight: 500; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+table.rules td:first-child { font-family: var(--font-mono); white-space: nowrap; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+@media (max-width: 520px) { h1 { font-size: 24px; } }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+html { scroll-behavior: smooth; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">mu · markup/markdown utility · v0.2.0 + images in progress</div>
+    <h1>mu logic maps<span class="rule" aria-hidden="true">════════════════</span></h1>
+    <p class="lede">How input becomes terminal output, traced through the real functions. Each map lists the code it follows, so you can open the file and walk it step by step. Diamonds are decisions; rounded ends are where the program exits.</p>
+  </header>
+
+  <nav class="index" aria-label="Maps">
+    <a href="#overview">1 Overview</a>
+    <a href="#cli">2 CLI entry</a>
+    <a href="#detect">3 Format detection</a>
+    <a href="#layout">4 Document layout</a>
+    <a href="#data">5 Data printing</a>
+    <a href="#pager">6 Pager loop</a>
+    <a href="#images">7 Images <span class="tag">wip</span></a>
+  </nav>
+
+  <section class="map" id="overview">
+    <h2>1 · End to end</h2>
+    <p class="purpose">The two paths through mu. Documents become one event stream that a single layout engine lays out. Data formats become styled lines for a simpler printer. Both produce plain lines with their own SGR styling, which either print once or open in the pager.</p>
+    <div class="chart"><pre class="mermaid">
+flowchart LR
+  IN(["File or stdin"]) --> RD["read_input<br/>bytes to UTF-8, invalid bytes replaced"]
+  RD --> DET{"Which format?"}
+  DET -->|"-f flag, extension, or sniff"| P["present"]
+  P -->|"Markdown"| PC["pulldown-cmark Parser"]
+  P -->|"HTML, RST, Org, AsciiDoc"| FP["format::*::events<br/>hand-written parsers"]
+  PC --> EV["pulldown-cmark Event stream"]
+  FP --> EV
+  EV --> RE["render_events<br/>shared layout engine"]
+  P -->|"JSON, YAML, TOML"| HL["data::*::highlight"]
+  HL --> SL["Styled lines"]
+  SL --> DP["data::print"]
+  RE --> OUT["Terminal lines<br/>each closes its own style"]
+  DP --> OUT
+  OUT --> PG{"Taller than the screen?"}
+  PG -->|"yes"| PAGER["Built-in pager"]
+  PG -->|"no"| W(["One write to stdout"])
+    </pre></div>
+    <ul class="trace">
+      <li><code>src/main.rs:main</code> drives everything</li>
+      <li><code>src/format/mod.rs:present</code> picks the path</li>
+      <li><code>src/render.rs:render_events</code> documents</li>
+      <li><code>src/data/mod.rs:print</code> data</li>
+    </ul>
+  </section>
+
+  <section class="map" id="cli">
+    <h2>2 · CLI entry</h2>
+    <p class="purpose">What <code>main</code> does from arguments to exit code. A closed pipe such as <code>mu x.md | head</code> counts as success.</p>
+    <div class="chart"><pre class="mermaid">
+flowchart TD
+  S(["mu args"]) --> PA{"parse_args"}
+  PA -->|"-h"| H(["print usage, exit 0"])
+  PA -->|"-V"| V(["print version, exit 0"])
+  PA -->|"unknown flag or bad value"| E2(["error and usage, exit 2"])
+  PA -->|"ok"| T{"No FILE and stdin<br/>is a terminal?"}
+  T -->|"yes"| U(["print usage, exit 2"])
+  T -->|"no"| R["read_input FILE or stdin"]
+  R -->|"io error"| E1(["error, exit 1"])
+  R --> O["Options::new<br/>resolve_width, resolve_color"]
+  O --> F{"--format given?"}
+  F -->|"yes"| FMT["use that format"]
+  F -->|"no"| D["detect path, input"]
+  FMT --> P["present input, format, options"]
+  D --> P
+  P --> SP{"should_page?"}
+  SP -->|"yes"| SO{"pager::Session::open<br/>/dev/tty usable?"}
+  SO -->|"yes"| RUN["session.run with relayout closure"]
+  RUN --> X0(["exit 0, or 1 on a tty error"])
+  SO -->|"no"| WR
+  SP -->|"no"| WR["write_all and flush"]
+  WR -->|"ok or BrokenPipe"| X0b(["exit 0"])
+  WR -->|"other error"| X1(["exit 1"])
+    </pre></div>
+    <div class="table-scroll">
+      <table class="rules">
+        <thead><tr><th>Decision</th><th>Rule</th></tr></thead>
+        <tbody>
+          <tr><td>resolve_width</td><td><code>-w N</code> wins, at least 20. Otherwise the terminal width, clamped to 20–100. With no terminal, 80. The width is probed on stdout, then stderr, then stdin, so <code>mu x | less -R</code> still sees the real width.</td></tr>
+          <tr><td>resolve_color</td><td><code>always</code> / <code>never</code> as given. With <code>auto</code>, color is on when stdout is a terminal and <code>NO_COLOR</code> is unset or empty.</td></tr>
+          <tr><td>should_page</td><td>Never when stdout is not a terminal. <code>never</code> → no, <code>always</code> → yes. With <code>auto</code>, it pages only when the output has more lines than the screen minus one, like <code>less -F</code>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="trace">
+      <li><code>src/main.rs:parse_args</code></li>
+      <li><code>src/main.rs:read_input</code></li>
+      <li><code>src/main.rs:resolve_width</code> · <code>auto_width</code></li>
+      <li><code>src/main.rs:should_page</code></li>
+      <li><code>src/term.rs:size</code> TIOCGWINSZ</li>
+    </ul>
+  </section>
+
+  <section class="map" id="detect">
+    <h2>3 · Format detection</h2>
+    <p class="purpose">An extension decides immediately. Without one, as with stdin, <code>.txt</code> or no extension, the content is sniffed in a fixed order, most specific rule first. Every rule is strict, so uncertain input falls through to Markdown, which shows plain text correctly anyway.</p>
+    <div class="chart"><pre class="mermaid">
+flowchart TD
+  A["detect path, input"] --> X{"Known extension?<br/>md html rst org adoc json yaml toml"}
+  X -->|"yes"| XF(["Format from extension"])
+  X -->|"no"| H["head = first 8 KB<br/>cut back to a char boundary"]
+  H --> J{"JSON?<br/>starts with brace or bracket<br/>and tokenizes as JSON so far"}
+  J -->|"yes"| FJ(["JSON"])
+  J -->|"no"| HT{"HTML?<br/>doctype, html, head or body tag first"}
+  HT -->|"yes"| FH(["HTML"])
+  HT -->|"no"| OR{"Org?<br/>#35;+KEYWORD or #35;+BEGIN_ line, PROPERTIES drawer,<br/>or star heading plus a described or URL link"}
+  OR -->|"yes"| FO(["Org"])
+  OR -->|"no"| RS{"RST?<br/>.. directive:: or .. _target: line,<br/>over-and-underlined title after a blank line,<br/>or link/role syntax with no Markdown headings or fences"}
+  RS -->|"yes"| FR(["RST"])
+  RS -->|"no"| AD{"AsciiDoc?<br/>= Title first line, :attr: header,<br/>source block attribute plus delimiter, table fence"}
+  AD -->|"yes"| FA(["AsciiDoc"])
+  AD -->|"no"| TO{"TOML?<br/>2+ lines, 80% table or key = value,<br/>at least one key = value"}
+  TO -->|"yes"| FT(["TOML"])
+  TO -->|"no"| YA{"YAML?<br/>3+ lines, 80% shaped, a key,<br/>top-level key or --- or item mapping,<br/>no fences, quotes or tables"}
+  YA -->|"yes"| FY(["YAML"])
+  YA -->|"no"| MD(["Markdown"])
+    </pre></div>
+    <ul class="trace">
+      <li><code>src/format/mod.rs:detect</code> · <code>sniff</code></li>
+      <li><code>src/data/json.rs:sniff</code></li>
+      <li><code>src/format/html.rs:sniff</code></li>
+      <li><code>src/format/org.rs:sniff</code> · <code>has_sniff_link</code></li>
+      <li><code>src/format/rst.rs:sniff</code> · <code>has_markdown_structure</code></li>
+      <li><code>src/format/asciidoc.rs:sniff</code></li>
+      <li><code>src/data/toml.rs:sniff</code></li>
+      <li><code>src/data/yaml.rs:sniff</code> · <code>is_prose_value</code></li>
+      <li><code>tests/sniff.rs</code> pins every fixture to its format</li>
+    </ul>
+  </section>
+
+  <section class="map" id="layout">
+    <h2>4 · Document layout</h2>
+    <p class="purpose">One <code>Renderer</code> consumes events from any document format. Inline text collects as styled word atoms. When its block ends, the atoms are wrapped to the width left after container gutters, such as quote bars and list indents, and then written behind those gutters.</p>
+    <div class="chart"><pre class="mermaid">
+flowchart TD
+  EV["Next event"] --> K{"Event kind"}
+  K -->|"Start tag"| ST{"Which tag"}
+  ST -->|"Paragraph or Heading"| IB["begin_block, open inline buffer<br/>heading picks its level style"]
+  ST -->|"BlockQuote, Item, Footnote"| CT["push Container<br/>gutter: quote bar, bullet, number, label"]
+  ST -->|"CodeBlock, Metadata, HtmlBlock"| RAW["start Raw buffer"]
+  ST -->|"Table"| TB["start Table<br/>cells collect as atoms"]
+  ST -->|"Emphasis, Strong, Link, Image"| STY["push inline style<br/>link remembers its URL"]
+  K -->|"Text, Code, breaks"| TX{"Raw block open?"}
+  TX -->|"yes"| RAWT["append verbatim"]
+  TX -->|"no"| AT["Inline atoms in one arena<br/>words, spaces, styles<br/>control chars become U+FFFD"]
+  K -->|"End tag"| EN{"Which tag"}
+  EN -->|"Paragraph or Heading"| WRAP["wrap atoms to avail<br/>= width minus gutters, min 16"]
+  WRAP --> EMIT["emit lines behind gutters<br/>H1 and H2 get a rule underneath"]
+  EN -->|"CodeBlock or Metadata"| FR["frame: top edge with language,<br/>bar per line, dashed bar on wrap"]
+  EN -->|"HtmlBlock"| HB["dim raw HTML, drop comments"]
+  EN -->|"Table"| TR["table::render<br/>shrink widest columns, box-draw"]
+  EN -->|"Quote, Item, Footnote"| POP["pop Container"]
+  K -->|"Rule"| RU["dim rule across the width"]
+  K -->|"TaskListMarker"| TM["swap bullet for a checkbox"]
+  EMIT --> OUT["output String"]
+  FR --> OUT
+  HB --> OUT
+  TR --> OUT
+  RU --> OUT
+    </pre></div>
+    <ul class="trace">
+      <li><code>src/render.rs:Renderer::event</code> · <code>start</code> · <code>end</code></li>
+      <li><code>src/render.rs:flush_inline</code> · <code>emit_lines</code> · <code>line_prefix</code></li>
+      <li><code>src/render.rs:end_framed</code> · <code>verbatim_chunks</code></li>
+      <li><code>src/inline.rs:Inline</code> · <code>wrap</code> · <code>push_clean</code></li>
+      <li><code>src/table.rs:render</code></li>
+      <li><code>src/format/{html,rst,org,asciidoc}.rs:events</code> feed this</li>
+    </ul>
+  </section>
+
+  <section class="map" id="data">
+    <h2>5 · Data printing</h2>
+    <p class="purpose">Highlighters only classify text into styled spans. The shared printer owns everything that touches the terminal: tabs, control-character scrubbing, width and SGR. Every data format therefore keeps the same safety and layout guarantees as documents.</p>
+    <div class="chart"><pre class="mermaid">
+flowchart TD
+  IN["input text"] --> F{"Format"}
+  F -->|"JSON"| JV{"Valid JSON or NDJSON<br/>and nested 256 deep or less?"}
+  JV -->|"yes"| JP["re-indent, 2 spaces<br/>strings and numbers kept as written"]
+  JV -->|"no"| JR["color line by line as written"]
+  F -->|"YAML"| Y["line tokenizer with state<br/>block scalars, quotes, flow collections"]
+  F -->|"TOML"| T["line lexer with state<br/>multi-line strings, open arrays"]
+  JP --> L["StyledLine = list of style and text spans"]
+  JR --> L
+  Y --> L
+  T --> L
+  L --> C["next char"]
+  C --> Q{"char"}
+  Q -->|"CR or LF"| C
+  Q -->|"tab"| TAB["spaces to the next 4-column stop"]
+  Q -->|"control"| REP["U+FFFD"]
+  Q -->|"other"| G["glyph with its display width"]
+  TAB --> G
+  REP --> G
+  G --> OV{"column + width over the limit?"}
+  OV -->|"yes"| BR["reset style, newline,<br/>dim dashed continuation bar"]
+  OV -->|"no"| SC{"style changed?"}
+  BR --> SC
+  SC -->|"yes"| SG["write SGR, or reset if plain"]
+  SC -->|"no"| PUSH["write glyph"]
+  SG --> PUSH
+  PUSH --> C
+  C -->|"end of line"| EL["reset if styled, newline"]
+    </pre></div>
+    <ul class="trace">
+      <li><code>src/data/json.rs:highlight</code> · <code>sniff</code></li>
+      <li><code>src/data/yaml.rs:highlight</code> · <code>State::line</code></li>
+      <li><code>src/data/toml.rs:highlight</code></li>
+      <li><code>src/data/mod.rs:print</code> · <code>Printer::glyph</code> · <code>end_line</code></li>
+      <li><code>src/style.rs</code> STYLE_DATA_* theme</li>
+    </ul>
+  </section>
+
+  <section class="map" id="pager">
+    <h2>6 · Pager loop</h2>
+    <p class="purpose">The built-in pager reads keys from <code>/dev/tty</code>, which is why <code>curl … | mu</code> can page. A resize arrives through a self-pipe, so <code>poll</code> can never miss it. When the width is automatic, a resize re-renders at the new width and keeps the reader's place proportionally.</p>
+    <div class="chart"><pre class="mermaid">
+flowchart TD
+  O["Session::open<br/>/dev/tty, raw mode, alternate screen,<br/>panic hook restores the terminal"] --> R["run: route SIGWINCH into a self-pipe"]
+  R --> D["draw_frame<br/>visible lines plus status bar,<br/>one synchronized write"]
+  D --> W["poll tty and resize pipe"]
+  W -->|"resize"| RS["drain pipe, read the new size"]
+  RS --> RL{"relayout columns:<br/>width is automatic and changed?"}
+  RL -->|"yes"| RR["present again at the new width"]
+  RL -->|"no"| KEEP["keep the document"]
+  RR --> VR["view.resize<br/>top scaled to the new length"]
+  KEEP --> VR
+  VR --> D
+  W -->|"input"| KEY["read bytes, parse_keys<br/>letters, control keys, CSI escapes"]
+  KEY --> A{"Action"}
+  A -->|"Quit: q or Ctrl-C"| Q(["drop: leave alternate screen,<br/>restore termios"])
+  A -->|"line, page, half page, top, bottom"| CL["view.apply<br/>clamp to 0 .. max_top"]
+  CL --> D
+  KEY -->|"tty closed"| Q
+    </pre></div>
+    <ul class="trace">
+      <li><code>src/pager.rs:Session::open</code> · <code>run</code> · <code>drop</code></li>
+      <li><code>src/pager.rs:ResizeSignal</code> · <code>on_resize</code></li>
+      <li><code>src/pager.rs:wait_for_input</code> poll</li>
+      <li><code>src/pager.rs:parse_keys</code> · <code>key_action</code> · <code>escape_action</code></li>
+      <li><code>src/pager.rs:View::apply</code> · <code>View::resize</code></li>
+      <li><code>src/main.rs</code> relayout closure</li>
+    </ul>
+  </section>
+
+  <section class="map" id="images">
+    <h2>7 · Images <span class="status">in progress · 0.3.0</span></h2>
+    <p class="purpose">This is the planned flow. The skeleton and entry points are committed, and the four parts are being built in parallel: sources, codecs, SVG and encoders. Renderer and CLI wiring come next. Any failure along the way falls back to the alt text that mu shows today.</p>
+    <div class="chart"><pre class="mermaid">
+flowchart TD
+  IMG["Image alone in its paragraph or block"] --> MODE{"--images mode, color on?"}
+  MODE -->|"never, or color off"| ALT(["show alt text as today"])
+  MODE -->|"auto or fetch"| SRC{"source::fetch src"}
+  SRC -->|"data: URI"| B64["base64 or percent decode"]
+  SRC -->|"http or https"| NET{"mode is fetch?"}
+  NET -->|"yes"| CURL["system curl, 10 s timeout, 20 MB cap"]
+  NET -->|"no"| ALT
+  SRC -->|"relative or file path"| PATH["resolve against --base<br/>or the input file's folder"]
+  B64 --> DEC{"codec::decode by magic bytes"}
+  CURL --> DEC
+  PATH --> DEC
+  DEC -->|"PNG, JPEG, GIF, WebP"| RAS["RGBA pixels, size limits checked"]
+  DEC -->|"other"| SVG{"svg::parse"}
+  SVG -->|"yes"| VEC["SVG tree, external refs blocked"]
+  SVG -->|"no"| ALT
+  RAS --> FIT["encode::fit<br/>one scale factor, at most 1,<br/>bounded by width and screen height"]
+  VEC --> FIT
+  FIT --> PR{"Output protocol"}
+  PR -->|"half-block: pager, most terminals"| HB["upper-half-block cells<br/>top pixel as fg, bottom as bg"]
+  PR -->|"Kitty, Ghostty, WezTerm"| KI["resize, send raw RGBA,<br/>cursor stays put"]
+  PR -->|"iTerm2"| IT["resize, encode PNG,<br/>inline image escape"]
+  HB --> CAP["dim alt caption below"]
+  KI --> CAP
+  IT --> CAP
+    </pre></div>
+    <ul class="trace">
+      <li><code>src/image/mod.rs:load</code> · <code>draw</code> · <code>reserve</code></li>
+      <li><code>src/image/source.rs:fetch</code> <em>(agent in progress)</em></li>
+      <li><code>src/image/codec.rs:decode</code> · <code>encode_png</code> <em>(agent in progress)</em></li>
+      <li><code>src/image/svg.rs:Svg</code> <em>(agent in progress)</em></li>
+      <li><code>src/image/encode.rs:fit</code> · <code>half_blocks</code> · <code>kitty</code> · <code>iterm</code> <em>(agent in progress)</em></li>
+      <li><code>src/image/base64.rs</code> done</li>
+    </ul>
+  </section>
+
+  <footer>Drawn from the mu source at commit 6697424 (v0.2.0 plus the image skeleton). The aspect math in map 7: the scale factor is the smaller of 1, max width in pixels over image width, and max height in pixels over image height. Cells are counted from that one factor, so width and height shrink together.</footer>
+</div>
+
+<!--claude-mermaid-runtime-begin:3477-->
+<style>.mermaid-diagram{margin-block:4px}.mermaid-diagram svg{display:block;margin:0 auto;max-width:100%;height:auto}</style>
+<script src="/_runtime/mermaid-11.16.1.min.js"></script>
+<script>(function(){
+var CFG={"palettes":{"light":{"surface":"#f4efe4","text":"#42392e","line":"#8a7f6d","border":"#7a6c52","bg":"#fffdf8"},"dark":{"surface":"#262b34","text":"#f2f3f5","line":"#a8adb8","border":"#9aa4b8","bg":"#1f232b"}}};
+if(typeof mermaid==='undefined')return;
+var pres=Array.prototype.slice.call(document.querySelectorAll('pre.mermaid')).filter(function(p){if(p.hasAttribute('data-claude-mermaid-claimed'))return false;p.setAttribute('data-claude-mermaid-claimed','1');return true;});
+if(!pres.length)return;
+var mq=window.matchMedia?window.matchMedia('(prefers-color-scheme: dark)'):null;
+var root=document.documentElement;
+var items=pres.map(function(pre){
+var mount=document.createElement('div');mount.className='mermaid-diagram';
+return {pre:pre,mount:mount,src:pre.textContent||''};
+});
+var seq=0;
+var renderGen=0;
+var lastKey='';
+function pageBg(fallback){
+var els=[document.body,document.documentElement];
+for(var i=0;i<els.length;i++){
+var c=els[i]&&getComputedStyle(els[i]).backgroundColor;
+if(c&&c!=='transparent'&&c!=='rgba(0, 0, 0, 0)')return c;
+}
+return fallback;
+}
+function render(){
+var theme=root.getAttribute('data-theme');
+var dark=theme==='dark'||(!!(mq&&mq.matches)&&theme!=='light');
+var pal=dark?CFG.palettes.dark:CFG.palettes.light;
+var bg=pageBg(pal.bg);
+var key=(dark?'d':'l')+'|'+bg;
+if(key===lastKey)return;
+lastKey=key;
+var gen=++renderGen;
+var font=getComputedStyle(document.body).fontFamily||'sans-serif';
+var nat={useMaxWidth:false};
+mermaid.initialize({
+startOnLoad:false,securityLevel:'strict',theme:'base',
+flowchart:nat,sequence:nat,er:nat,state:nat,class:nat,pie:nat,
+gantt:nat,journey:nat,timeline:nat,gitGraph:nat,mindmap:nat,xyChart:nat,
+quadrantChart:nat,sankey:nat,c4:nat,requirement:nat,block:nat,
+packet:nat,kanban:nat,architecture:nat,radar:nat,
+themeVariables:{background:bg,mainBkg:pal.surface,primaryColor:pal.surface,
+primaryTextColor:pal.text,lineColor:pal.line,primaryBorderColor:pal.border,
+nodeBorder:pal.border,clusterBorder:pal.border,edgeLabelBackground:bg,
+clusterBkg:'rgba(127,127,127,0.07)',titleColor:pal.text,
+darkMode:dark,rowOdd:bg,rowEven:'rgba(127,127,127,0.07)',
+attributeBackgroundColorOdd:bg,attributeBackgroundColorEven:'rgba(127,127,127,0.07)',
+fontSize:'16px',fontFamily:font},
+themeCSS:'.node rect, .node circle, .node polygon, .node path, .cluster rect { stroke-width: 2px; }'
+});
+items.forEach(function(it){
+var id='claude-mermaid-'+seq++;
+mermaid.render(id,it.src).then(function(r){
+if(gen!==renderGen)return;
+var prev=it.pre.previousElementSibling;
+if(prev&&prev.className==='mermaid-diagram'&&prev!==it.mount)return;
+it.mount.innerHTML=r.svg;
+if(!it.mount.parentNode)it.pre.parentNode.insertBefore(it.mount,it.pre);
+it.pre.style.display='none';
+},function(){
+var scratch=document.getElementById(id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+scratch=document.getElementById('d'+id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+if(gen!==renderGen)return;
+if(it.mount.parentNode)it.mount.parentNode.removeChild(it.mount);
+it.pre.style.display='';
+});
+});
+}
+render();
+if(mq&&mq.addEventListener)mq.addEventListener('change',render);
+if(typeof MutationObserver!=='undefined')new MutationObserver(render).observe(root,{attributes:true,attributeFilter:['data-theme']});
+})();</script>
+<!--claude-mermaid-runtime-end-->
+
+</body></html>
