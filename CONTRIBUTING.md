@@ -38,3 +38,7 @@ From 1.0 on, breaking changes bump MAJOR and features bump MINOR. 1.0 means the 
 5. Commit as `Release X.Y.Z`, with nothing else in that commit
 6. Tag it: `git tag -a vX.Y.Z -m "mu X.Y.Z"`
 7. Check that `cargo run --release -- --version` prints `mu X.Y.Z`
+8. Push the commit and tag: `git push origin main --follow-tags`
+9. Publish a GitHub release from the tag, with that version's `CHANGELOG.md` section as its notes: `gh release create vX.Y.Z --title "mu X.Y.Z" --notes-file <section>`
+
+`v0.1.0` predates this process. It marks the last commit released as `mdread`, so it has no `Release` commit and no `CHANGELOG.md` in its tree; its notes live in the 0.1.0 section of today's changelog. Every tag from `v0.2.0` on points at its `Release X.Y.Z` commit.

@@ -3,7 +3,7 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-/* Layout: a single reading column of chart sections, with a sticky index of the seven maps */
+/* Layout: a single reading column of chart sections, with a sticky index of the eight maps */
 :root {
   --bg: #f5f7f9;
   --surface: #ffffff;
@@ -107,7 +107,7 @@ html { scroll-behavior: smooth; }
 
 <div class="wrap">
   <header class="top">
-    <div class="eyebrow">mu · markup/markdown utility · v0.2.0 + images in progress</div>
+    <div class="eyebrow">mu · markup/markdown utility · v0.4.0</div>
     <h1>mu logic maps<span class="rule" aria-hidden="true">════════════════</span></h1>
     <p class="lede">How input becomes terminal output, traced through the real functions. Each map lists the code it follows, so you can open the file and walk it step by step. Diamonds are decisions; rounded ends are where the program exits.</p>
   </header>
@@ -119,17 +119,20 @@ html { scroll-behavior: smooth; }
     <a href="#layout">4 Document layout</a>
     <a href="#data">5 Data printing</a>
     <a href="#pager">6 Pager loop</a>
-    <a href="#images">7 Images <span class="tag">wip</span></a>
+    <a href="#images">7 Images</a>
+    <a href="#urls">8 URL fetch</a>
   </nav>
 
   <section class="map" id="overview">
     <h2>1 · End to end</h2>
-    <p class="purpose">The two paths through mu. Documents become one event stream that a single layout engine lays out. Data formats become styled lines for a simpler printer. Both produce plain lines with their own SGR styling, which either print once or open in the pager.</p>
+    <p class="purpose">The two paths through mu. Input is a file, stdin or a URL fetched with curl. Documents become one event stream that a single layout engine lays out. Data formats become styled lines for a simpler printer. Both produce plain lines with their own SGR styling, which either print once or open in the pager.</p>
     <div class="chart"><pre class="mermaid">
 flowchart LR
   IN(["File or stdin"]) --> RD["read_input<br/>bytes to UTF-8, invalid bytes replaced"]
+  URL(["http or https URL"]) --> FE["load_url<br/>system curl, see map 8"]
+  FE --> DET
   RD --> DET{"Which format?"}
-  DET -->|"-f flag, extension, or sniff"| P["present"]
+  DET -->|"-f, Content-Type, extension, or sniff"| P["present"]
   P -->|"Markdown"| PC["pulldown-cmark Parser"]
   P -->|"HTML, RST, Org, AsciiDoc"| FP["format::*::events<br/>hand-written parsers"]
   PC --> EV["pulldown-cmark Event stream"]
@@ -146,6 +149,7 @@ flowchart LR
     </pre></div>
     <ul class="trace">
       <li><code>src/main.rs:main</code> drives everything</li>
+      <li><code>src/fetch.rs</code> URL input</li>
       <li><code>src/format/mod.rs:present</code> picks the path</li>
       <li><code>src/render.rs:render_events</code> documents</li>
       <li><code>src/data/mod.rs:print</code> data</li>
@@ -154,31 +158,37 @@ flowchart LR
 
   <section class="map" id="cli">
     <h2>2 · CLI entry</h2>
-    <p class="purpose">What <code>main</code> does from arguments to exit code. A closed pipe such as <code>mu x.md | head</code> counts as success.</p>
+    <p class="purpose">What <code>main</code> does from arguments to exit code. Files and URLs both load into a <code>Source</code>, which <code>show</code> renders the same way. A closed pipe such as <code>mu x.md | head</code> counts as success.</p>
     <div class="chart"><pre class="mermaid">
 flowchart TD
   S(["mu args"]) --> PA{"parse_args"}
   PA -->|"-h"| H(["print usage, exit 0"])
   PA -->|"-V"| V(["print version, exit 0"])
-  PA -->|"unknown flag or bad value"| E2(["error and usage, exit 2"])
+  PA -->|"unknown flag, bad value,<br/>or a URL flag without a URL"| E2(["error and usage, exit 2"])
   PA -->|"ok"| T{"No FILE and stdin<br/>is a terminal?"}
   T -->|"yes"| U(["print usage, exit 2"])
-  T -->|"no"| R["read_input FILE or stdin"]
-  R -->|"io error"| E1(["error, exit 1"])
-  R --> O["Options::new<br/>resolve_width, resolve_color"]
-  O --> F{"--format given?"}
-  F -->|"yes"| FMT["use that format"]
-  F -->|"no"| D["detect path, input"]
-  FMT --> P["present input, format, options"]
-  D --> P
+  T -->|"no"| ISU{"FILE starts with<br/>http:// or https://?"}
+  ISU -->|"yes"| LU["load_url<br/>see map 8"]
+  ISU -->|"no"| LF["load_file<br/>read_input, then -f or detect"]
+  LU -->|"curl missing or failed"| E1(["error, exit 1"])
+  LF -->|"io error"| E1
+  LU --> SRC["Source: parts, title, base,<br/>image mode, HTTP failure"]
+  LF --> SRC
+  SRC --> SH["show<br/>Options: resolve_width, resolve_color,<br/>resolve_images"]
+  SH --> P["present_all<br/>each part in its own format, half-blocks"]
   P --> SP{"should_page?"}
   SP -->|"yes"| SO{"pager::Session::open<br/>/dev/tty usable?"}
-  SO -->|"yes"| RUN["session.run with relayout closure"]
-  RUN --> X0(["exit 0, or 1 on a tty error"])
-  SO -->|"no"| WR
-  SP -->|"no"| WR["write_all and flush"]
-  WR -->|"ok or BrokenPipe"| X0b(["exit 0"])
+  SO -->|"yes"| RUN["session.run titled with the file or URL,<br/>relayout closure"]
+  SO -->|"no"| NP
+  SP -->|"no"| NP{"native_protocol:<br/>kitty or iTerm2, not tmux?"}
+  NP -->|"yes"| RN["present_all again with that protocol"]
+  NP -->|"no"| WR["write_all and flush"]
+  RN --> WR
+  RUN --> HF
+  WR -->|"ok or BrokenPipe"| HF{"HTTP status 400 or more?"}
   WR -->|"other error"| X1(["exit 1"])
+  HF -->|"yes"| X1h(["mu: url: HTTP code, exit 1"])
+  HF -->|"no"| X0(["exit 0"])
     </pre></div>
     <div class="table-scroll">
       <table class="rules">
@@ -186,13 +196,16 @@ flowchart TD
         <tbody>
           <tr><td>resolve_width</td><td><code>-w N</code> wins, at least 20. Otherwise the terminal width, clamped to 20–100. With no terminal, 80. The width is probed on stdout, then stderr, then stdin, so <code>mu x | less -R</code> still sees the real width.</td></tr>
           <tr><td>resolve_color</td><td><code>always</code> / <code>never</code> as given. With <code>auto</code>, color is on when stdout is a terminal and <code>NO_COLOR</code> is unset or empty.</td></tr>
+          <tr><td>resolve_images</td><td>Mode from <code>--images</code>, else <code>fetch</code> for a URL and <code>auto</code> for a file. Base from <code>--base</code>, else the file path or the final URL. Cell pixels from TIOCGWINSZ, else 8×16. At most the screen height minus 2 rows.</td></tr>
           <tr><td>should_page</td><td>Never when stdout is not a terminal. <code>never</code> → no, <code>always</code> → yes. With <code>auto</code>, it pages only when the output has more lines than the screen minus one, like <code>less -F</code>.</td></tr>
         </tbody>
       </table>
     </div>
     <ul class="trace">
       <li><code>src/main.rs:parse_args</code></li>
-      <li><code>src/main.rs:read_input</code></li>
+      <li><code>src/main.rs:load_file</code> · <code>load_url</code> · <code>read_input</code></li>
+      <li><code>src/main.rs:show</code> · <code>present_all</code> · <code>native_protocol</code></li>
+      <li><code>src/main.rs:resolve_images</code></li>
       <li><code>src/main.rs:resolve_width</code> · <code>auto_width</code></li>
       <li><code>src/main.rs:should_page</code></li>
       <li><code>src/term.rs:size</code> TIOCGWINSZ</li>
@@ -201,7 +214,7 @@ flowchart TD
 
   <section class="map" id="detect">
     <h2>3 · Format detection</h2>
-    <p class="purpose">An extension decides immediately. Without one, as with stdin, <code>.txt</code> or no extension, the content is sniffed in a fixed order, most specific rule first. Every rule is strict, so uncertain input falls through to Markdown, which shows plain text correctly anyway.</p>
+    <p class="purpose">For a URL, the response <code>Content-Type</code> is tried first and then the URL path's extension (map 8). An extension decides immediately. Without one, as with stdin, <code>.txt</code> or no extension, the content is sniffed in a fixed order, most specific rule first. Every rule is strict, so uncertain input falls through to Markdown, which shows plain text correctly anyway.</p>
     <div class="chart"><pre class="mermaid">
 flowchart TD
   A["detect path, input"] --> X{"Known extension?<br/>md html rst org adoc json yaml toml"}
@@ -351,51 +364,112 @@ flowchart TD
   </section>
 
   <section class="map" id="images">
-    <h2>7 · Images <span class="status">in progress · 0.3.0</span></h2>
-    <p class="purpose">This is the planned flow. The skeleton and entry points are committed, and the four parts are being built in parallel: sources, codecs, SVG and encoders. Renderer and CLI wiring come next. Any failure along the way falls back to the alt text that mu shows today.</p>
+    <h2>7 · Images</h2>
+    <p class="purpose">How an image in a document becomes a picture. Only an image standing alone in its paragraph or block is drawn; inside running text it stays <code>[image: alt]</code>. Every failure, including a decoder panic, falls back to that alt text, never to an error.</p>
     <div class="chart"><pre class="mermaid">
 flowchart TD
-  IMG["Image alone in its paragraph or block"] --> MODE{"--images mode, color on?"}
-  MODE -->|"never, or color off"| ALT(["show alt text as today"])
-  MODE -->|"auto or fetch"| SRC{"source::fetch src"}
+  IMG["Block ends with one image<br/>and no other text"] --> MODE{"color on and<br/>--images not never?"}
+  MODE -->|"no"| ALT(["show [image: alt]"])
+  MODE -->|"yes"| CACHE{"load_cached:<br/>seen this src and base?"}
+  CACHE -->|"yes"| PIC
+  CACHE -->|"no"| SRC{"source::fetch src"}
   SRC -->|"data: URI"| B64["base64 or percent decode"]
-  SRC -->|"http or https"| NET{"mode is fetch?"}
-  NET -->|"yes"| CURL["system curl, 10 s timeout, 20 MB cap"]
+  SRC -->|"http or https,<br/>or a relative path on a URL base"| NET{"mode is fetch?"}
+  NET -->|"yes"| CURL["system curl -fsSL, http(s) only,<br/>10 s timeout, 20 MB cap"]
   NET -->|"no"| ALT
   SRC -->|"relative or file path"| PATH["resolve against --base<br/>or the input file's folder"]
-  B64 --> DEC{"codec::decode by magic bytes"}
+  B64 --> DEC{"codec::decode by magic bytes<br/>inside guarded: panics caught"}
   CURL --> DEC
   PATH --> DEC
-  DEC -->|"PNG, JPEG, GIF, WebP"| RAS["RGBA pixels, size limits checked"]
-  DEC -->|"other"| SVG{"svg::parse"}
+  DEC -->|"PNG, JPEG, GIF, WebP"| RAS["RGBA pixels,<br/>64 MP and 16384 px limits"]
+  DEC -->|"other"| SVG{"Svg::parse"}
   SVG -->|"yes"| VEC["SVG tree, external refs blocked"]
   SVG -->|"no"| ALT
-  RAS --> FIT["encode::fit<br/>one scale factor, at most 1,<br/>bounded by width and screen height"]
-  VEC --> FIT
+  RAS --> PIC["Picture, cached per thread"]
+  VEC --> PIC
+  PIC --> FIT["encode::fit<br/>one scale factor, at most 1,<br/>bounded by column width and screen height"]
   FIT --> PR{"Output protocol"}
-  PR -->|"half-block: pager, most terminals"| HB["upper-half-block cells<br/>top pixel as fg, bottom as bg"]
-  PR -->|"Kitty, Ghostty, WezTerm"| KI["resize, send raw RGBA,<br/>cursor stays put"]
-  PR -->|"iTerm2"| IT["resize, encode PNG,<br/>inline image escape"]
+  PR -->|"half-block: pager, tmux, pipes, most terminals"| HB["encode::half_blocks<br/>top pixel as fg, bottom as bg"]
+  PR -->|"Kitty: kitty, Ghostty"| KI["encode::resize then kitty<br/>raw RGBA, rows reserved"]
+  PR -->|"iTerm2: iTerm2, WezTerm"| IT["encode::resize, encode_png,<br/>iterm inline image escape"]
   HB --> CAP["dim alt caption below"]
   KI --> CAP
   IT --> CAP
     </pre></div>
     <ul class="trace">
-      <li><code>src/image/mod.rs:load</code> · <code>draw</code> · <code>reserve</code></li>
-      <li><code>src/image/source.rs:fetch</code> <em>(agent in progress)</em></li>
-      <li><code>src/image/codec.rs:decode</code> · <code>encode_png</code> <em>(agent in progress)</em></li>
-      <li><code>src/image/svg.rs:Svg</code> <em>(agent in progress)</em></li>
-      <li><code>src/image/encode.rs:fit</code> · <code>half_blocks</code> · <code>kitty</code> · <code>iterm</code> <em>(agent in progress)</em></li>
-      <li><code>src/image/base64.rs</code> done</li>
+      <li><code>src/render.rs:draw_standalone_image</code></li>
+      <li><code>src/image/mod.rs:load_cached</code> · <code>load</code> · <code>guarded</code></li>
+      <li><code>src/image/mod.rs:draw_guarded</code> · <code>draw</code> · <code>reserve</code></li>
+      <li><code>src/image/source.rs:fetch</code> · <code>join_url</code> · <code>remote</code></li>
+      <li><code>src/image/codec.rs:decode</code> · <code>encode_png</code></li>
+      <li><code>src/image/svg.rs:Svg::parse</code> · <code>rasterize</code></li>
+      <li><code>src/image/encode.rs:fit</code> · <code>half_blocks</code> · <code>kitty</code> · <code>iterm</code></li>
+      <li><code>src/main.rs:native_protocol</code> picks the protocol</li>
     </ul>
   </section>
 
-  <footer>Drawn from the mu source at commit 6697424 (v0.2.0 plus the image skeleton). The aspect math in map 7: the scale factor is the smaller of 1, max width in pixels over image width, and max height in pixels over image height. Cells are counted from that one factor, so width and height shrink together.</footer>
+  <section class="map" id="urls">
+    <h2>8 · URL fetch</h2>
+    <p class="purpose">What <code>mu &lt;url&gt;</code> does before the shared rendering takes over. mu has no HTTP or TLS code; it runs the system <code>curl</code> without a shell, with the URL as one argument after <code>--</code>. Response headers come back on stdout ahead of the body, and the final URL comes back on stderr.</p>
+    <div class="chart"><pre class="mermaid">
+flowchart TD
+  U["load_url url"] --> RW{"--no-rewrite given?"}
+  RW -->|"no"| RAW{"raw_url:<br/>GitHub blob, GitLab -/blob,<br/>or Gist page?"}
+  RAW -->|"yes"| RT["raw file URL,<br/>query and fragment dropped"]
+  RAW -->|"no"| AS["URL as typed"]
+  RW -->|"yes"| AS
+  RT --> ARGS["curl_args<br/>-sS -L, http(s) only incl. redirects,<br/>connect timeout 10, --compressed, -D -,<br/>user flags, --curl extras, then -- URL"]
+  AS --> ARGS
+  ARGS --> RUN{"run curl"}
+  RUN -->|"not installed"| MISS(["opening URLs needs curl, exit 1"])
+  RUN -->|"non-zero exit"| FAIL(["url: curl's message, exit 1"])
+  RUN -->|"ok"| PARSE["parse_response<br/>skip redirect, 1xx and proxy-tunnel blocks,<br/>keep the final status and headers"]
+  PARSE --> INC{"-i or -I?"}
+  INC -->|"yes"| TAB["header_table<br/>status line and headers as escaped Markdown"]
+  INC -->|"no"| BODY
+  TAB --> HEAD{"-I?"}
+  HEAD -->|"yes"| SRC
+  HEAD -->|"no"| BODY{"Body format"}
+  BODY -->|"-f given"| F1["that format"]
+  BODY -->|"Content-Type known"| F2["from_media_type<br/>text/plain and octet-stream skipped"]
+  BODY -->|"path extension known"| F3["from_url_path<br/>path only, never the host"]
+  BODY -->|"otherwise"| F4["sniff, else Markdown"]
+  F1 --> SRC
+  F2 --> SRC
+  F3 --> SRC
+  F4 --> SRC["Source<br/>title = URL as typed,<br/>base = final URL, images = fetch<br/>unless --images is given,<br/>failure set for HTTP 400 and above"]
+    </pre></div>
+    <div class="table-scroll">
+      <table class="rules">
+        <thead><tr><th>Flag</th><th>Sent to curl as</th></tr></thead>
+        <tbody>
+          <tr><td>-H -X -u -k</td><td>the same flag. <code>-H</code> repeats.</td></tr>
+          <tr><td>-d, --data</td><td><code>--data</code>, repeatable.</td></tr>
+          <tr><td>-A</td><td><code>-A</code>, default <code>mu/VERSION</code>.</td></tr>
+          <tr><td>-I</td><td><code>-I -o /dev/null</code>, so the headers come only through <code>-D -</code> and are not repeated.</td></tr>
+          <tr><td>--timeout</td><td><code>--max-time</code>.</td></tr>
+          <tr><td>--curl ARG</td><td>ARG verbatim, before <code>--</code>.</td></tr>
+          <tr><td>-i, --no-rewrite</td><td>nothing: handled by mu.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="trace">
+      <li><code>src/main.rs:load_url</code></li>
+      <li><code>src/fetch.rs:is_url</code> · <code>raw_url</code></li>
+      <li><code>src/fetch.rs:curl_args</code> · <code>fetch</code></li>
+      <li><code>src/fetch.rs:parse_response</code> · <code>split_block</code> · <code>is_interim</code></li>
+      <li><code>src/fetch.rs:header_table</code> · <code>escape_markdown</code></li>
+      <li><code>src/format/mod.rs:from_media_type</code> · <code>from_url_path</code></li>
+      <li><code>tests/url.rs</code> runs against a local server</li>
+    </ul>
+  </section>
+
+  <footer>Drawn from the mu source at v0.4.0. The aspect math in map 7: the scale factor is the smaller of 1, max width in pixels over image width, and max height in pixels over image height. Cells are counted from that one factor, so width and height shrink together.</footer>
 </div>
 
 <!--claude-mermaid-runtime-begin:3477-->
 <style>.mermaid-diagram{margin-block:4px}.mermaid-diagram svg{display:block;margin:0 auto;max-width:100%;height:auto}</style>
-<script src="/_runtime/mermaid-11.16.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
 <script>(function(){
 var CFG={"palettes":{"light":{"surface":"#f4efe4","text":"#42392e","line":"#8a7f6d","border":"#7a6c52","bg":"#fffdf8"},"dark":{"surface":"#262b34","text":"#f2f3f5","line":"#a8adb8","border":"#9aa4b8","bg":"#1f232b"}}};
 if(typeof mermaid==='undefined')return;
