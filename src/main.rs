@@ -4,6 +4,9 @@
 // Notes: Renders into one buffer, then either pages it or writes it in a single call;
 // a closed pipe (`| head`) is not an error
 
+// Wired into the CLI in the next task
+#[allow(dead_code)]
+mod fetch;
 mod pager;
 mod term;
 
