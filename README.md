@@ -1,11 +1,15 @@
 # mu
 
-**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown and other markup. It reads a file or stdin, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks, links and footnotes. Documents taller than the screen open in a built-in pager. It is a single ~750 KB binary with three dependencies and no config file.
+**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, JSON, YAML and TOML. It reads a file or stdin, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, and syntax coloring for data. Documents taller than the screen open in a built-in pager. It is a single ~800 KB binary with three dependencies and no config file.
 
 ```sh
 mu README.md
 curl -s https://example.com/doc.md | mu
-mu -w 72 notes.md
+curl -s https://example.com/ | mu          # HTML, detected from the content
+curl -s https://api.github.com/repos/rust-lang/rust | mu   # JSON, re-indented
+mu Cargo.toml
+mu -f rst < docs/index.txt
+mu -w 72 notes.org
 mu --paging never CHANGELOG.md | grep -i fix
 ```
 
@@ -24,6 +28,7 @@ mu [OPTIONS] [FILE]
 
 Reads FILE, or stdin when FILE is - or absent.
 
+  -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
@@ -31,6 +36,7 @@ Reads FILE, or stdin when FILE is - or absent.
   -V, --version
 ```
 
+- **Format:** `-f` if given, else the file extension, else a look at the content (this is how piped input such as `curl … | mu` is recognised), else Markdown. See [Formats](#formats).
 - **Width:** the terminal width (probed on stdout, then stderr, then stdin, so piping into a pager still sees the real width), capped at 100 columns for readable line lengths. Falls back to 80 when no terminal is attached. `-w` overrides both, minimum 20.
 - **Color:** on when stdout is a terminal and `NO_COLOR` is unset. Use `--color always` to keep styling when piping elsewhere.
 - **Paging:** with `auto`, output that would push the prompt off screen opens in the pager; shorter output prints straight to the terminal (like `less -F`). Output to a pipe or file is never paged, whatever the setting.
@@ -51,7 +57,28 @@ Built in, no `less` needed. It takes over the screen (alternate screen, so your 
 
 The bottom row shows the file name, the visible line range, how far through you are, and a quit hint. Resizing the window re-renders the document at the new width and keeps your place proportionally; with `-w` the layout stays fixed and only the window changes. Lines wider than the window are clipped rather than wrapped.
 
+## Formats
+
+| Format | Extensions | Recognised in piped input by | Shown as |
+|---|---|---|---|
+| Markdown | `.md` `.markdown` `.mdown` `.mkd` | the fallback for anything else | document |
+| HTML | `.html` `.htm` `.xhtml` | `<!doctype html>`, `<html>`, `<head>` or `<body>` at the start | document |
+| reStructuredText | `.rst` `.rest` | `.. directive::` lines, `.. _target:`, over-and-underlined titles, `` `text <url>`_ `` links, `:role:` | document |
+| Org-mode | `.org` | `#+KEYWORD:` or `#+BEGIN_` lines, `:PROPERTIES:`, or `*` headings with Org links | document |
+| AsciiDoc | `.adoc` `.asciidoc` `.asc` | `= Title` first line, `:attr:` header lines, `[source,…]` blocks, `\|===` tables | document |
+| JSON | `.json` `.jsonl` `.geojson` | starts with `{` or `[` and parses as JSON | data, re-indented when valid |
+| YAML | `.yaml` `.yml` | mostly `key: value` / `- item` lines with a top-level key or `---` | data |
+| TOML | `.toml` | mostly `[table]` and `key = value` lines | data |
+
+Detection from content is deliberately conservative: when in doubt it picks Markdown, which shows plain text correctly too. Use `-f` when it guesses wrong.
+
+**Documents** share one layout engine: each format is translated into the same block and inline structure as Markdown, so headings, lists, quotes, tables, code frames, links and admonitions look the same whatever the source. HTML drops `script`, `style`, `head` and similar non-content, and decodes entities. reStructuredText and AsciiDoc admonitions and Org `#+BEGIN_NOTE`-style blocks render like GitHub alerts.
+
+**Data** is colored by token: keys, strings, numbers, booleans and null, comments, punctuation, YAML anchors and tags, and TOML table headers. Valid JSON (and NDJSON) is re-indented with two spaces; invalid JSON, YAML and TOML are shown exactly as written. Long lines hard-wrap behind a `┆` bar.
+
 ## What renders
+
+The Markdown mapping below is the reference; the other document formats map their equivalents onto it.
 
 | Markdown | Terminal output |
 |---|---|
@@ -74,7 +101,7 @@ The bottom row shows the file name, the visible line range, how far through you 
 
 ## Design
 
-- **Parser:** [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) with default features off and `simd` on (CommonMark plus GFM tables, strikethrough, task lists, footnotes, alerts). The other dependencies are `unicode-width` (CJK and emoji columns) and `libc` (one ioctl).
+- **Parser:** [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) with default features off and `simd` on (CommonMark plus GFM tables, strikethrough, task lists, footnotes, alerts). HTML, reStructuredText, Org and AsciiDoc have small hand-written, tolerant parsers that emit the same pulldown-cmark events, so they reuse the whole layout engine. JSON, YAML and TOML have hand-written tokenizers feeding a shared printer. The other dependencies are `unicode-width` (CJK and emoji columns) and `libc` (one ioctl).
 - **Theme:** only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it.
 - **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mu emits are its own SGR codes.
 - **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write, or the pager. Styles are emitted lazily and every line closes its own style, so the pager can draw any window of lines on its own.
@@ -85,7 +112,9 @@ src/
   main.rs    CLI: args, input, width/color/paging decisions, single write
   pager.rs   built-in pager: raw mode, keys, scrolling, resize, status bar
   term.rs    terminal size via TIOCGWINSZ
-  lib.rs     public API: render(&str, &Options) -> String
+  lib.rs     public API: render, present, detect, sniff, Format, Options
+  format/    Format enum, detection, dispatch; html, rst, org, asciidoc → events
+  data/      styled-line printer; json, yaml, toml highlighters
   render.rs  event walker: blocks, containers, lists, code frames
   inline.rs  styled word atoms, control-char scrubbing, word wrap
   table.rs   column fitting and box drawing
@@ -101,6 +130,7 @@ Measured 2026-11-09 on a 12-core Linux box under background load, so treat these
 | 7 KB README | ≈2 ms per run over a `cat` baseline (process start dominates); `bat` on the same file ≈120 ms |
 | 9 MB corpus (909 real crate READMEs and CHANGELOGs) | ≈0.25–0.35 s, ≈26–40 MB/s |
 | Parser alone on the same corpus | ≈60–100 MB/s |
+| 5.7 MB minified JSON, re-indented and colored (Apple Silicon Mac) | ≈0.3 s |
 
 Layout roughly doubles the parse cost. There is headroom there if throughput on multi-megabyte files ever matters; for normal documents the run time is process start.
 
@@ -112,7 +142,7 @@ cargo clippy --all-targets
 cargo run --release -- -w 60 tests/fixtures/kitchen-sink.md
 ```
 
-`tests/render.rs` has exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output, every styled line resets before its newline, and no control character from the input reaches the output. `src/pager.rs` unit-tests key decoding, scroll clamping, resize behaviour and the status bar; the pager's terminal I/O was checked by hand in a pseudo-terminal.
+`tests/render.rs` and one test file per format (`tests/html.rs`, `tests/json.rs`, …) have exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output, every styled line resets before its newline, and no control character from the input reaches the output. `src/pager.rs` unit-tests key decoding, scroll clamping, resize behaviour and the status bar; the pager's terminal I/O was checked by hand in a pseudo-terminal. `tests/sniff.rs` sniffs every fixture against every format so one format's rule cannot quietly claim another's files.
 
 ## Versioning
 
@@ -120,7 +150,10 @@ Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and c
 
 ## Known limits
 
-- No syntax highlighting in code blocks (deliberate: it would cost startup time and binary size).
+- No syntax highlighting in code blocks (deliberate: it would cost startup time and binary size). Whole JSON, YAML and TOML files are colored; code blocks inside documents are not.
+- Non-Markdown parsers cover the subset real READMEs and pages use, not the full specs: no table cell spans (HTML, RST, AsciiDoc), no RST line blocks or letter/roman enumerators, no AsciiDoc footnotes, one header row per Org table.
+- YAML and TOML are colored, never reformatted. JSON nested deeper than 256 levels is colored as written rather than re-indented.
+- Content detection reads the first 8 KB. Short or unusual inputs may be shown as Markdown; use `-f`.
 - The pager has no search (`/`) yet.
 - Links are not clickable (no OSC 8 hyperlinks); the URL is printed instead.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.

@@ -86,6 +86,9 @@ const URL_CLOSE: char = '>';
 const OPEN_PRECEDERS: &str = "'\"([{<-/:";
 const ROLE_NAME_EXTRAS: &str = "-_.+";
 const EMBEDDED_LINK_END: &str = ">`_";
+const MARKDOWN_HEADING: char = '#';
+const MARKDOWN_MAX_HEADING: usize = 6;
+const MARKDOWN_FENCES: [&str; 2] = ["```", "~~~"];
 const ROLE_OPEN: &str = ":`";
 
 // Translate reStructuredText into document events
@@ -107,8 +110,19 @@ pub fn sniff(head: &str) -> bool {
             let after_blank = index == 0 || lines[index - 1].trim().is_empty();
             after_blank && is_over_under_title(window)
         })
-        || head.contains(EMBEDDED_LINK_END)
-        || has_role(head)
+        || (!has_markdown_structure(&lines) && (head.contains(EMBEDDED_LINK_END) || has_role(head)))
+}
+
+// Detect ATX headings or code fences, which RST never uses
+// Notes: inline RST syntax inside a Markdown document is usually being quoted, not used
+fn has_markdown_structure(lines: &[&str]) -> bool {
+    lines.iter().any(|line| {
+        let hashes = line.len() - line.trim_start_matches(MARKDOWN_HEADING).len();
+        let atx = (1..=MARKDOWN_MAX_HEADING).contains(&hashes) && line[hashes..].starts_with(' ');
+        atx || MARKDOWN_FENCES
+            .iter()
+            .any(|fence| line.trim_start().starts_with(fence))
+    })
 }
 
 // Line shape helpers

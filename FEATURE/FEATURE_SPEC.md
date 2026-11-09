@@ -32,8 +32,10 @@ Document formats share one layout engine. Each one gets the same headings, lists
 
 1. `-f/--format <name>` flag
 2. File extension (case-insensitive)
-3. Content sniffing: used for stdin and for unknown or missing extensions
+3. Content sniffing on the first 8 KB: used for stdin and for unknown or missing extensions. The order is JSON, HTML, Org, RST, AsciiDoc, TOML, YAML, and each rule is conservative
 4. Fallback: Markdown, which shows plain text correctly too
+
+`tests/sniff.rs` pins every fixture to its format. A sniffing change must keep it green.
 
 ## Invariants, all formats
 

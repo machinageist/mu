@@ -43,7 +43,7 @@ Adornment headings, inline markup, lists, `::` literal blocks, `code-block`/`not
 → verify: as above
 
 ## 9. Docs
-README (usage, formats table, detection), FEATURE_SPEC updated to the shipped reality, and the binary size checked.
+README (usage, formats table, detection), FEATURE_SPEC updated to the shipped reality, and the binary size checked. ✅ done: 816 KB
 → verify: `cargo build --release && ls -l target/release/mu`
 
 ## 10. Release 0.2.0

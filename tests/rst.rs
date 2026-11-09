@@ -163,6 +163,11 @@ fn sniff_detects_rst_but_not_markdown() {
     assert_ne!(mu::sniff(include_str!("../README.md")), Format::Rst);
     assert_eq!(mu::sniff("Title\n=====\n\nBody"), Format::Markdown);
     assert_eq!(mu::sniff("Intro\n\n=====\nTitle\n=====\n"), Format::Rst);
+    // Markdown that quotes RST syntax is still Markdown
+    assert_eq!(
+        mu::sniff("# Docs\n\nRST links look like `` `text <url>`_ `` and roles like `:ref:`.\n"),
+        Format::Markdown
+    );
     // An AsciiDoc listing under its block attribute is not an RST title
     assert_ne!(
         mu::sniff("Intro\n\n[source,sh]\n----\nls\n----"),
