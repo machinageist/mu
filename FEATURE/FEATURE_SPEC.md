@@ -42,6 +42,14 @@ Document formats share one layout engine. Each one gets the same headings, lists
 - No output line is wider than the wrap width, except the documented overflow cases
 - Stripping SGR from color output gives exactly the plain output
 - Every styled line resets its style before its newline, so the pager can draw any window of lines
-- No control character from the input reaches the output. The only escapes mu writes are its own SGR codes
+- No control character from the input reaches the output. The only escapes mu writes are its own: SGR codes, 24-bit colors for half-block images, and Kitty or iTerm2 image sequences with payloads mu encodes
 - Malformed input never panics or errors. It renders on a best-effort basis
 - A closed pipe is a success. Exit codes: 0 ok, 1 read/write error, 2 usage error
+
+## Images
+
+- An image alone in its paragraph or block is drawn. Inline images, failures, color off and `--images never` all show `[image: alt]`
+- The aspect ratio is exact to within half a cell, using the terminal's reported cell pixels or an assumed 1:2 cell. Images are never enlarged, never wider than the content column and never taller than the screen minus 2 rows
+- No network access unless `--images fetch`. Remote loads go through the system `curl`, limited to http(s), including on redirect
+- Decode limits: 20 MB per source, 64 megapixels, 16384 px per side
+- The pager always uses half blocks. Native protocols are used only when writing straight to a supporting terminal outside tmux

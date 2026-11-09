@@ -1,6 +1,6 @@
 # mu
 
-**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, JSON, YAML and TOML. It reads a file or stdin, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, and syntax coloring for data. Documents taller than the screen open in a built-in pager. It is a single ~800 KB binary with three dependencies and no config file.
+**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, JSON, YAML and TOML. It reads a file or stdin, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, and syntax coloring for data. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.0 MB binary with no config file.
 
 ```sh
 mu README.md
@@ -10,6 +10,7 @@ curl -s https://api.github.com/repos/rust-lang/rust | mu   # JSON, re-indented
 mu Cargo.toml
 mu -f rst < docs/index.txt
 mu -w 72 notes.org
+mu --images fetch page.html                # also download remote images
 mu --paging never CHANGELOG.md | grep -i fix
 ```
 
@@ -29,6 +30,8 @@ mu [OPTIONS] [FILE]
 Reads FILE, or stdin when FILE is - or absent.
 
   -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml
+      --images <MODE>  auto, fetch or never (default: auto; fetch also downloads http(s) images)
+      --base <DIR|URL> Resolve relative image paths here (default: the file's folder)
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
@@ -76,6 +79,17 @@ Detection from content is deliberately conservative: when in doubt it picks Mark
 
 **Data** is colored by token: keys, strings, numbers, booleans and null, comments, punctuation, YAML anchors and tags, and TOML table headers. Valid JSON (and NDJSON) is re-indented with two spaces; invalid JSON, YAML and TOML are shown exactly as written. Long lines hard-wrap behind a `┆` bar.
 
+## Images
+
+An image that stands alone in its paragraph or block is drawn as a picture, with its alt text as a dim caption: HTML `<img>` and `<figure>`, Markdown `![alt](src)` on its own line, RST `.. image::`, AsciiDoc `image::` and Org `[[file.png]]`. An image inside running text stays `[image: alt]`, since a picture cannot sit inside a wrapped line.
+
+- **Aspect ratio:** mu reads the terminal's cell size in pixels and scales the image by one factor so it fits the text width and the screen height. Width and height shrink together, so the aspect ratio is exact to within half a cell. Images are never enlarged past their natural size. When a terminal does not report pixel sizes, mu assumes the common 1:2 cell.
+- **Drawing:** printed straight to kitty or Ghostty, the Kitty graphics protocol is used; in iTerm2 or WezTerm, iTerm2 inline images. Everywhere else, inside the pager and under tmux, images are drawn with 24-bit-color `▀` half blocks.
+- **Formats:** PNG, JPEG, GIF (first frame), WebP and SVG. SVG text is not rendered, and SVGs cannot load external files or URLs.
+- **Sources:** local paths, relative to the input file (or `--base`, which piped input needs), and `data:` URIs. Remote `http(s)` images load only with `--images fetch`, through the system `curl` with a 10 s timeout and a 20 MB cap. A page cannot make mu touch the network unless you ask.
+- **Fallback:** with `--images never`, color off, or anything that fails to load or decode, the `[image: alt]` text is shown as before.
+- **Limits:** sources over 20 MB, images over 64 megapixels or 16384 pixels on a side are refused before decoding.
+
 ## What renders
 
 The Markdown mapping below is the reference; the other document formats map their equivalents onto it.
@@ -101,9 +115,10 @@ The Markdown mapping below is the reference; the other document formats map thei
 
 ## Design
 
+- **Images:** `png`, `zune-jpeg`, `gif` and `image-webp` decode raster images; `resvg` (default features off: no text, no system fonts) renders SVG. Fitting, resampling and the half-block, Kitty and iTerm2 encoders are hand-written. Decoded images are cached for the run, so a pager resize redraws without reloading.
 - **Parser:** [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) with default features off and `simd` on (CommonMark plus GFM tables, strikethrough, task lists, footnotes, alerts). HTML, reStructuredText, Org and AsciiDoc have small hand-written, tolerant parsers that emit the same pulldown-cmark events, so they reuse the whole layout engine. JSON, YAML and TOML have hand-written tokenizers feeding a shared printer. The other dependencies are `unicode-width` (CJK and emoji columns) and `libc` (one ioctl).
-- **Theme:** only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it.
-- **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mu emits are its own SGR codes.
+- **Theme:** text uses only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it.
+- **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mu emits are its own: SGR styling and, for images, 24-bit colors and Kitty or iTerm2 image sequences whose payload mu encodes itself.
 - **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write, or the pager. Styles are emitted lazily and every line closes its own style, so the pager can draw any window of lines on its own.
 - **Pager terminal handling:** raw mode via `termios`, a self-pipe for `SIGWINCH` so a resize can never be missed between a redraw and the next `poll()`, synchronized-output frames to avoid flicker, and the terminal restored on exit, on error and from a panic hook (release builds abort on panic, which skips destructors).
 
@@ -115,6 +130,7 @@ src/
   lib.rs     public API: render, present, detect, sniff, Format, Options
   format/    Format enum, detection, dispatch; html, rst, org, asciidoc → events
   data/      styled-line printer; json, yaml, toml highlighters
+  image/     sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs  event walker: blocks, containers, lists, code frames
   inline.rs  styled word atoms, control-char scrubbing, word wrap
   table.rs   column fitting and box drawing
@@ -155,6 +171,7 @@ Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and c
 - YAML and TOML are colored, never reformatted. JSON nested deeper than 256 levels is colored as written rather than re-indented.
 - Content detection reads the first 8 KB. Short or unusual inputs may be shown as Markdown; use `-f`.
 - The pager has no search (`/`) yet.
+- Images: no EXIF orientation for JPEGs, no animated GIFs, no SVG text, and no images inline within a line of text.
 - Links are not clickable (no OSC 8 hyperlinks); the URL is printed instead.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.
 - A table with too many columns to fit at 3 columns each overflows the width rather than becoming unreadable.
