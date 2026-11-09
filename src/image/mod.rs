@@ -1,8 +1,11 @@
 // Author: machinageist
 // Date: 2026-11-09
-// Description: Image settings shared by the renderer and the CLI
+// Description: Image settings, decoded pixels, and the load and draw entry points
 // Notes: The library default is ImageMode::Never so `render` and `present` stay pure text
 // with no file or network access unless a caller opts in
+
+// TODO(images task 4): remove once the renderer calls load and draw
+#![allow(dead_code)]
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImageMode {
@@ -55,4 +58,107 @@ pub struct ImageOptions {
     pub protocol: Protocol,
     // Tallest image in rows, usually the terminal height minus a little
     pub max_rows: Option<usize>,
+}
+
+pub(crate) mod base64;
+mod codec;
+mod encode;
+mod source;
+mod svg;
+
+// Decode limits so a hostile file cannot exhaust memory
+pub(crate) const MAX_SOURCE_BYTES: usize = 20 * 1024 * 1024;
+pub(crate) const MAX_PIXELS: u64 = 64_000_000;
+pub(crate) const MAX_SIDE: u32 = 16_384;
+
+// Decoded pixels, 8-bit RGBA, row-major, straight (not premultiplied) alpha
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Rgba {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
+impl Rgba {
+    // Check that the pixel buffer matches the dimensions and the limits
+    pub(crate) fn is_valid(&self) -> bool {
+        within_limits(self.width, self.height)
+            && self.pixels.len() as u64 == u64::from(self.width) * u64::from(self.height) * 4
+    }
+}
+
+// Check dimensions against the decode limits before allocating
+pub(crate) fn within_limits(width: u32, height: u32) -> bool {
+    width > 0
+        && height > 0
+        && width <= MAX_SIDE
+        && height <= MAX_SIDE
+        && u64::from(width) * u64::from(height) <= MAX_PIXELS
+}
+
+// A loaded image, raster now or vector until its target size is known
+pub(crate) enum Picture {
+    Raster(Rgba),
+    Vector(svg::Svg),
+}
+
+impl Picture {
+    // Natural size in pixels
+    pub(crate) fn size(&self) -> (u32, u32) {
+        match self {
+            Picture::Raster(image) => (image.width, image.height),
+            Picture::Vector(svg) => svg.size(),
+        }
+    }
+}
+
+// Load and decode an image source, or None when images are off or anything fails
+pub(crate) fn load(src: &str, options: &ImageOptions) -> Option<Picture> {
+    let bytes = source::fetch(src, options)?;
+    if let Some(image) = codec::decode(&bytes) {
+        return Some(Picture::Raster(image));
+    }
+    svg::Svg::parse(&bytes).map(Picture::Vector)
+}
+
+// Draw a picture as terminal lines, at most `max_cols` wide; empty when it cannot be drawn
+pub(crate) fn draw(picture: &Picture, max_cols: usize, options: &ImageOptions) -> Vec<String> {
+    let Some((cols, rows)) = encode::fit(picture.size(), max_cols, options.max_rows, options.cell)
+    else {
+        return Vec::new();
+    };
+    // Rasterise at the pixel size the cells will show, so vectors stay sharp
+    let target = (
+        u32::try_from(cols)
+            .unwrap_or(u32::MAX)
+            .saturating_mul(options.cell.width),
+        u32::try_from(rows)
+            .unwrap_or(u32::MAX)
+            .saturating_mul(options.cell.height),
+    );
+    let raster = match picture {
+        Picture::Raster(image) => std::borrow::Cow::Borrowed(image),
+        Picture::Vector(svg) => match svg.rasterize(target.0, target.1) {
+            Some(image) => std::borrow::Cow::Owned(image),
+            None => return Vec::new(),
+        },
+    };
+    match options.protocol {
+        Protocol::HalfBlock => encode::half_blocks(&raster, cols, rows),
+        Protocol::Kitty => {
+            let scaled = encode::resize(&raster, target.0, target.1);
+            reserve(encode::kitty(&scaled, cols, rows), rows)
+        }
+        Protocol::Iterm => {
+            let scaled = encode::resize(&raster, target.0, target.1);
+            reserve(encode::iterm(&codec::encode_png(&scaled), cols, rows), rows)
+        }
+    }
+}
+
+// Put a native graphics escape on the first of `rows` otherwise empty lines
+fn reserve(escape: String, rows: usize) -> Vec<String> {
+    let mut lines = vec![String::new(); rows.max(1)];
+    lines[0] = escape;
+    lines
 }
