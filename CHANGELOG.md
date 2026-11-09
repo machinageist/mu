@@ -4,6 +4,13 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Added
+- `mu <url>` fetches an http(s) URL with the system `curl` and presents it. The format comes from `-f`, then the response `Content-Type`, then the URL path's extension, then the content
+- curl-like URL options: `-H`, `-X`, `-d`, `-A`, `-u`, `-k`, `-i` (status and headers as a table, then the body), `-I` (status and headers only), `--timeout`, and `--curl <ARG>` passed straight to curl
+- GitHub, GitLab and Gist page URLs are fetched as their raw file; `--no-rewrite` fetches the URL as typed
+- Images in a fetched page download by default and resolve against the final URL; `--images` overrides
+- An HTTP status of 400 or above still shows the body, then reports `HTTP <code>` and exits 1
+
 ## 0.3.0 - 2026-11-09
 
 ### Added

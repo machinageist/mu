@@ -34,6 +34,9 @@ const FLAG_DATA: &str = "--data";
 const FLAG_USER: &str = "-u";
 const FLAG_INSECURE: &str = "-k";
 const FLAG_HEAD: &str = "-I";
+// With -I curl also writes the headers as its output, which would repeat the -D - copy
+const FLAG_OUTPUT: &str = "-o";
+const DISCARD_PATH: &str = "/dev/null";
 const FLAG_MAX_TIME: &str = "--max-time";
 const DEFAULT_USER_AGENT_PREFIX: &str = "mu/";
 
@@ -67,7 +70,7 @@ const GIST_RAW_SUFFIX: &str = "/raw";
 // Header table text, written as Markdown for the shared renderer
 const TABLE_HEAD: &str = "| Header | Value |\n|---|---|\n";
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Request {
     pub url: String,
     pub headers: Vec<String>,
@@ -152,7 +155,11 @@ pub fn curl_args(request: &Request, version: &str) -> Vec<String> {
         args.push(FLAG_INSECURE.to_owned());
     }
     if request.head {
-        args.push(FLAG_HEAD.to_owned());
+        args.extend([
+            FLAG_HEAD.to_owned(),
+            FLAG_OUTPUT.to_owned(),
+            DISCARD_PATH.to_owned(),
+        ]);
     }
     if let Some(timeout) = &request.timeout {
         args.extend([FLAG_MAX_TIME.to_owned(), timeout.clone()]);
@@ -362,6 +369,7 @@ mod tests {
             data: vec!["a=1".to_owned()],
             user: Some("me:pw".to_owned()),
             insecure: true,
+            head: true,
             timeout: Some("5".to_owned()),
             extra: vec!["--http1.1".to_owned()],
             ..Request::default()
@@ -388,6 +396,9 @@ mod tests {
                 "-u",
                 "me:pw",
                 "-k",
+                "-I",
+                "-o",
+                "/dev/null",
                 "--max-time",
                 "5",
                 "--http1.1",

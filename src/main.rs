@@ -1,11 +1,9 @@
 // Author: machinageist
 // Date: 2026-11-09
-// Description: mu CLI, reads markup or data from a file or stdin and prints it formatted for the terminal
+// Description: mu CLI, reads markup or data from a file, stdin or a URL and prints it formatted for the terminal
 // Notes: Renders into one buffer, then either pages it or writes it in a single call;
 // a closed pipe (`| head`) is not an error
 
-// Wired into the CLI in the next task
-#[allow(dead_code)]
 mod fetch;
 mod pager;
 mod term;
@@ -14,14 +12,15 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
-use mu::{CellSize, Format, ImageMode, ImageOptions, Options, Protocol, detect, present};
+use mu::{CellSize, Format, ImageMode, ImageOptions, Options, Protocol, detect, present, sniff};
 
 const USAGE: &str = "\
-Usage: mu [OPTIONS] [FILE]
+Usage: mu [OPTIONS] [FILE | URL]
 
 Present Markdown, HTML, reStructuredText, Org, AsciiDoc, JSON, YAML or TOML in the
-terminal. Reads FILE, or stdin when FILE is - or absent. The format comes from the
-file extension, else from the content, else Markdown.
+terminal. Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL
+with curl. The format comes from the file extension, else from the content, else
+Markdown; for a URL the response Content-Type is tried first.
 
 Options:
   -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml
@@ -30,9 +29,24 @@ Options:
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
       --images <MODE>  auto, fetch or never (default: auto, local files and data: URIs only;
                        fetch also downloads http(s) images with curl)
-      --base <DIR|URL> Resolve relative image paths here (default: the file's folder)
+                       (default for a URL: fetch)
+      --base <DIR|URL> Resolve relative image paths here (default: the file's folder or the URL)
   -h, --help           Show this help
   -V, --version        Show the version
+
+URL options (curl-like, only valid with a URL):
+  -H, --header <H>     Add a request header (repeatable)
+  -X, --request <M>    Use another request method
+  -d, --data <D>       Send data in the request body (repeatable)
+  -A, --user-agent <UA> Set the User-Agent (default: mu/VERSION)
+  -u, --user <U:P>     Send credentials
+  -k, --insecure       Skip TLS certificate checks
+  -i, --include        Show the response status and headers, then the body
+  -I, --head           Show the response status and headers only
+      --timeout <SECS> Give up after this long
+      --curl <ARG>     Pass ARG straight to curl (repeatable)
+      --no-rewrite     Fetch the URL as typed, not the raw file behind a
+                       GitHub, GitLab or Gist page
 
 Pager keys:
   j k  Down Up  Enter   scroll a line        space b  PgDn PgUp   scroll a page
@@ -44,6 +58,7 @@ const PROGRAM: &str = "mu";
 const STDIN_PATH: &str = "-";
 const STDIN_TITLE: &str = "stdin";
 const ENV_NO_COLOR: &str = "NO_COLOR";
+const NEEDS_CURL: &str = "opening URLs needs curl";
 
 // Terminals that speak a native graphics protocol, read from the environment
 const ENV_TERM: &str = "TERM";
@@ -78,12 +93,28 @@ struct Args {
     width: Option<usize>,
     color: When,
     paging: When,
-    images: ImageMode,
+    // None until --images is given, so a URL can default to fetching
+    images: Option<ImageMode>,
     base: Option<String>,
+    request: fetch::Request,
+    include: bool,
+    no_rewrite: bool,
+    // The first URL-only flag seen, named in the error when there is no URL
+    url_flag: Option<String>,
+}
+
+// Input ready to render: one or more parts, each in its own format
+struct Source {
+    parts: Vec<(String, Format)>,
+    title: String,
+    base: Option<String>,
+    images: ImageMode,
+    // Set for an HTTP error status, reported after the body is shown
+    failure: Option<String>,
 }
 
 enum Command {
-    Render(Args),
+    Render(Box<Args>),
     Help,
     Version,
 }
@@ -112,37 +143,117 @@ fn main() -> ExitCode {
         return ExitCode::from(EXIT_USAGE);
     }
 
-    let file = args.path.as_deref().filter(|path| *path != STDIN_PATH);
-    let input = match read_input(file) {
-        Ok(input) => input,
-        Err(error) => {
-            let source = args.path.as_deref().unwrap_or(STDIN_PATH);
-            eprintln!("{PROGRAM}: {source}: {error}");
+    let source = match args.path.as_deref().filter(|path| fetch::is_url(path)) {
+        Some(url) => load_url(&args, url),
+        None => load_file(&args),
+    };
+    let source = match source {
+        Ok(source) => source,
+        Err(message) => {
+            eprintln!("{PROGRAM}: {message}");
             return ExitCode::from(EXIT_FAILURE);
         }
     };
+    let code = show(&args, &source);
+    match &source.failure {
+        Some(message) => {
+            eprintln!("{PROGRAM}: {message}");
+            ExitCode::from(EXIT_FAILURE)
+        }
+        None => code,
+    }
+}
 
+// Read a file or stdin, detecting its format
+fn load_file(args: &Args) -> Result<Source, String> {
+    let file = args.path.as_deref().filter(|path| *path != STDIN_PATH);
+    let input = read_input(file).map_err(|error| {
+        let source = args.path.as_deref().unwrap_or(STDIN_PATH);
+        format!("{source}: {error}")
+    })?;
+    let format = args.format.unwrap_or_else(|| detect(file, &input));
+    Ok(Source {
+        parts: vec![(input, format)],
+        title: file.unwrap_or(STDIN_TITLE).to_owned(),
+        // A file path is fine as a base: relative images resolve against its folder
+        base: args.base.clone().or_else(|| file.map(str::to_owned)),
+        images: args.images.unwrap_or(ImageMode::Auto),
+        failure: None,
+    })
+}
+
+// Fetch a URL with curl, choosing the body's format from the response
+fn load_url(args: &Args, url: &str) -> Result<Source, String> {
+    let target = (!args.no_rewrite)
+        .then(|| fetch::raw_url(url))
+        .flatten()
+        .unwrap_or_else(|| url.to_owned());
+    let request = fetch::Request {
+        url: target,
+        ..args.request.clone()
+    };
+    let response = fetch::fetch(&request, VERSION).map_err(|error| match error {
+        fetch::FetchError::Missing => NEEDS_CURL.to_owned(),
+        fetch::FetchError::Failed(message) => format!("{url}: {message}"),
+    })?;
+
+    let mut parts = Vec::new();
+    if args.include || request.head {
+        parts.push((fetch::header_table(&response), Format::Markdown));
+    }
+    if !request.head {
+        let body = String::from_utf8(response.body.clone())
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
+        // text/plain and other unknown types fall through to the path and the content
+        let format = args
+            .format
+            .or_else(|| response.content_type().and_then(Format::from_media_type))
+            .or_else(|| Format::from_url_path(&response.final_url))
+            .unwrap_or_else(|| sniff(&body));
+        parts.push((body, format));
+    }
+    Ok(Source {
+        parts,
+        title: url.to_owned(),
+        base: Some(args.base.clone().unwrap_or(response.final_url.clone())),
+        images: args.images.unwrap_or(ImageMode::Fetch),
+        failure: response
+            .is_error()
+            .then(|| format!("{url}: HTTP {}", response.status)),
+    })
+}
+
+// Render every part of a source and join them
+fn present_all(source: &Source, options: &Options) -> String {
+    source
+        .parts
+        .iter()
+        .map(|(input, format)| present(input, *format, options))
+        .filter(|output| !output.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// Render a source and page it or write it out
+fn show(args: &Args, source: &Source) -> ExitCode {
     let options = Options {
-        images: resolve_images(&args, file),
+        images: resolve_images(source.images, source.base.clone()),
         ..Options::new(resolve_width(args.width), resolve_color(&args.color))
     };
-    let format = args.format.unwrap_or_else(|| detect(file, &input));
     // Half-blocks first: they work in the pager, and decide whether paging is needed
-    let output = present(&input, format, &options);
+    let output = present_all(source, &options);
 
     // Page when wanted and the terminal can be taken over, otherwise fall through to a plain write
     if should_page(&args.paging, &output)
         && let Ok(session) = pager::Session::open()
     {
-        let title = file.unwrap_or(STDIN_TITLE);
         let mut width = options.width;
         let mut relayout = |columns: usize| {
             let next = auto_width(columns);
             (args.width.is_none() && next != width).then(|| {
                 width = next;
-                present(
-                    &input,
-                    format,
+                present_all(
+                    source,
                     &Options {
                         width,
                         ..options.clone()
@@ -150,7 +261,7 @@ fn main() -> ExitCode {
                 )
             })
         };
-        return match session.run(title, output, &mut relayout) {
+        return match session.run(&source.title, output, &mut relayout) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{PROGRAM}: {error}");
@@ -164,7 +275,7 @@ fn main() -> ExitCode {
     let output = if protocol != Protocol::HalfBlock && options.images.mode != ImageMode::Never {
         let mut native = options.clone();
         native.images.protocol = protocol;
-        present(&input, format, &native)
+        present_all(source, &native)
     } else {
         output
     };
@@ -191,8 +302,12 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
         width: None,
         color: When::Auto,
         paging: When::Auto,
-        images: ImageMode::Auto,
+        images: None,
         base: None,
+        request: fetch::Request::default(),
+        include: false,
+        no_rewrite: false,
+        url_flag: None,
     };
     while let Some(arg) = raw.next() {
         let (flag, inline_value) = match arg.split_once('=') {
@@ -238,13 +353,39 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
                     .or_else(|| raw.next())
                     .ok_or("--images needs a value")?;
                 args.images =
-                    parse_image_mode(&value).ok_or(format!("invalid images mode '{value}'"))?;
+                    Some(parse_image_mode(&value).ok_or(format!("invalid images mode '{value}'"))?);
             }
             "--base" => {
                 let value = inline_value
                     .or_else(|| raw.next())
                     .ok_or("--base needs a value")?;
                 args.base = Some(value);
+            }
+            "-H" | "--header" | "-X" | "--request" | "-d" | "--data" | "-A" | "--user-agent"
+            | "-u" | "--user" | "--timeout" | "--curl" => {
+                let value = inline_value
+                    .or_else(|| raw.next())
+                    .ok_or(format!("{flag} needs a value"))?;
+                let request = &mut args.request;
+                match flag.as_str() {
+                    "-H" | "--header" => request.headers.push(value),
+                    "-X" | "--request" => request.method = Some(value),
+                    "-d" | "--data" => request.data.push(value),
+                    "-A" | "--user-agent" => request.user_agent = Some(value),
+                    "-u" | "--user" => request.user = Some(value),
+                    "--timeout" => request.timeout = Some(value),
+                    _ => request.extra.push(value),
+                }
+                args.url_flag.get_or_insert(flag);
+            }
+            "-k" | "--insecure" | "-i" | "--include" | "-I" | "--head" | "--no-rewrite" => {
+                match flag.as_str() {
+                    "-k" | "--insecure" => args.request.insecure = true,
+                    "-i" | "--include" => args.include = true,
+                    "-I" | "--head" => args.request.head = true,
+                    _ => args.no_rewrite = true,
+                }
+                args.url_flag.get_or_insert(flag);
             }
             _ if arg != STDIN_PATH && arg.starts_with('-') => {
                 return Err(format!("unknown option '{arg}'"));
@@ -253,7 +394,11 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
             _ => args.path = Some(arg),
         }
     }
-    Ok(Command::Render(args))
+    let has_url = args.path.as_deref().is_some_and(fetch::is_url);
+    if let (Some(flag), false) = (&args.url_flag, has_url) {
+        return Err(format!("{flag} only works with a URL"));
+    }
+    Ok(Command::Render(Box::new(args)))
 }
 
 // Parse an --images value
@@ -266,8 +411,8 @@ fn parse_image_mode(value: &str) -> Option<ImageMode> {
     }
 }
 
-// Build image settings from the flags and the terminal's cell geometry, half-blocks by default
-fn resolve_images(args: &Args, file: Option<&str>) -> ImageOptions {
+// Build image settings from the mode, base and the terminal's cell geometry, half-blocks by default
+fn resolve_images(mode: ImageMode, base: Option<String>) -> ImageOptions {
     let size = term::size();
     let cell = size
         .and_then(|size| {
@@ -280,9 +425,8 @@ fn resolve_images(args: &Args, file: Option<&str>) -> ImageOptions {
         })
         .unwrap_or_default();
     ImageOptions {
-        mode: args.images,
-        // A file path is fine as a base: relative images resolve against its folder
-        base: args.base.clone().or_else(|| file.map(str::to_owned)),
+        mode,
+        base,
         cell,
         protocol: Protocol::HalfBlock,
         max_rows: size.map(|size| size.rows.saturating_sub(IMAGE_ROW_MARGIN).max(1)),
