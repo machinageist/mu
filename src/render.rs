@@ -959,7 +959,7 @@ impl<'o> Renderer<'o> {
         let Some(picture) = image::load_cached(&image.src, options) else {
             return false;
         };
-        let lines = image::draw(&picture, self.avail(), options);
+        let lines = image::draw_guarded(&picture, self.avail(), options);
         if lines.is_empty() {
             return false;
         }

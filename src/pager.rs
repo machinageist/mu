@@ -50,7 +50,7 @@ const CTRL_F: u8 = 0x06;
 const CTRL_U: u8 = 0x15;
 const KEY_BUFFER_SIZE: usize = 64;
 
-// Terminal settings to put back if a panic aborts the process mid-session
+// Terminal settings to put back if a panic ends the process mid-session
 static ACTIVE_MODE: Mutex<Option<(RawFd, libc::termios)>> = Mutex::new(None);
 
 // Write end of the resize pipe, read by the signal handler
@@ -385,7 +385,7 @@ fn restore_terminal(fd: RawFd, mode: &libc::termios) {
     let _ = set_mode(fd, mode);
 }
 
-// Restore the terminal before a panic aborts the process, since abort skips Drop
+// Restore the terminal as soon as an uncaught panic is reported, before anything else prints
 fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

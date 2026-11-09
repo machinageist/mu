@@ -127,7 +127,7 @@ pub(crate) fn load_cached(src: &str, options: &ImageOptions) -> Option<Rc<Pictur
     if let Some(hit) = CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
         return hit;
     }
-    let loaded = load(src, options).map(Rc::new);
+    let loaded = guarded(|| load(src, options)).flatten().map(Rc::new);
     CACHE.with(|cache| cache.borrow_mut().insert(key, loaded.clone()));
     loaded
 }
@@ -141,8 +141,28 @@ fn load(src: &str, options: &ImageOptions) -> Option<Picture> {
     svg::Svg::parse(&bytes).map(Picture::Vector)
 }
 
+// Draw a picture, treating a panic in the rasteriser like any other failure
+pub(crate) fn draw_guarded(
+    picture: &Picture,
+    max_cols: usize,
+    options: &ImageOptions,
+) -> Vec<String> {
+    guarded(|| draw(picture, max_cols, options)).unwrap_or_default()
+}
+
+// Run third-party decoding code, turning a panic into None without printing it
+// Notes: the panic hook is swapped for a silent one meanwhile, so a caught panic neither
+// writes over the page nor fires the pager's restore-the-terminal hook; mu is single-threaded
+fn guarded<T>(work: impl FnOnce() -> T) -> Option<T> {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+    std::panic::set_hook(previous);
+    result.ok()
+}
+
 // Draw a picture as terminal lines, at most `max_cols` wide; empty when it cannot be drawn
-pub(crate) fn draw(picture: &Picture, max_cols: usize, options: &ImageOptions) -> Vec<String> {
+fn draw(picture: &Picture, max_cols: usize, options: &ImageOptions) -> Vec<String> {
     let Some((cols, rows)) = encode::fit(picture.size(), max_cols, options.max_rows, options.cell)
     else {
         return Vec::new();
@@ -181,4 +201,17 @@ fn reserve(escape: String, rows: usize) -> Vec<String> {
     let mut lines = vec![String::new(); rows.max(1)];
     lines[0] = escape;
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panics_in_guarded_work_become_none() {
+        assert_eq!(guarded(|| -> u8 { panic!("decoder bug") }), None);
+        assert_eq!(guarded(|| 7), Some(7));
+        // The normal hook is back afterwards
+        assert_eq!(guarded(|| 8), Some(8));
+    }
 }

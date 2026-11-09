@@ -120,7 +120,7 @@ The Markdown mapping below is the reference; the other document formats map thei
 - **Theme:** text uses only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it.
 - **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mu emits are its own: SGR styling and, for images, 24-bit colors and Kitty or iTerm2 image sequences whose payload mu encodes itself.
 - **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write, or the pager. Styles are emitted lazily and every line closes its own style, so the pager can draw any window of lines on its own.
-- **Pager terminal handling:** raw mode via `termios`, a self-pipe for `SIGWINCH` so a resize can never be missed between a redraw and the next `poll()`, synchronized-output frames to avoid flicker, and the terminal restored on exit, on error and from a panic hook (release builds abort on panic, which skips destructors).
+- **Pager terminal handling:** raw mode via `termios`, a self-pipe for `SIGWINCH` so a resize can never be missed between a redraw and the next `poll()`, synchronized-output frames to avoid flicker, and the terminal restored on exit, on error and from a panic hook. Image decoding runs under `catch_unwind`, so a bug in a third-party decoder shows the alt text instead of crashing.
 
 ```text
 src/
