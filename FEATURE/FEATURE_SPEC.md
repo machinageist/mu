@@ -1,5 +1,7 @@
 # mu — feature spec
 
+mu is short for *markup/markdown utility*.
+
 Long-lived behaviour and invariants. Update this when behaviour ships.
 
 ## Purpose

@@ -1,6 +1,6 @@
 # mu
 
-A small, fast Markdown renderer for the terminal. It reads a file or stdin, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks, links and footnotes. Documents taller than the screen open in a built-in pager. It is a single ~750 KB binary with three dependencies and no config file.
+**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown and other markup. It reads a file or stdin, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks, links and footnotes. Documents taller than the screen open in a built-in pager. It is a single ~750 KB binary with three dependencies and no config file.
 
 ```sh
 mu README.md

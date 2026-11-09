@@ -2,7 +2,7 @@
 name = "mu"
 version = "0.1.0"
 edition = "2024"
-description = "Lightweight, fast Markdown renderer for the terminal"
+description = "mu, the markup/markdown utility: a fast terminal presenter for Markdown, other markup and data formats"
 license = "MIT"
 
 [dependencies]
