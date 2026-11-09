@@ -1,0 +1,131 @@
+// Author: machinageist
+// Date: 2026-11-09
+// Description: Data formats as syntax-highlighted lines, printed full width with hard wrapping
+// Notes: Highlighters only classify text; this printer owns scrubbing, tabs, width and SGR,
+// so every data format keeps the same output invariants as documents
+
+pub mod json;
+pub mod toml;
+pub mod yaml;
+
+use unicode_width::UnicodeWidthChar;
+
+use crate::inline::{CONTROL_REPLACEMENT, text_width};
+use crate::render::{FRAME_WRAP_BAR, Options, TAB_STOP};
+use crate::style::{SGR_RESET, STYLE_FRAME, Style, paint};
+
+// One run of text in one style, never containing a newline
+pub type Span = (Style, String);
+
+// One source line as styled runs
+pub type StyledLine = Vec<Span>;
+
+// Narrowest usable line even on an absurd width
+const MIN_DATA_WIDTH: usize = 8;
+
+// Write styled lines, hard-wrapping long ones behind a dashed continuation bar
+pub fn print(lines: &[StyledLine], options: &Options) -> String {
+    let mut printer = Printer {
+        out: String::new(),
+        color: options.color,
+        limit: options.width.max(MIN_DATA_WIDTH),
+        column: 0,
+        active: Style::PLAIN,
+    };
+    for line in lines {
+        for (style, text) in line {
+            for ch in text.chars() {
+                printer.push(ch, *style);
+            }
+        }
+        printer.end_line();
+    }
+    printer.out
+}
+
+struct Printer {
+    out: String,
+    color: bool,
+    limit: usize,
+    column: usize,
+    active: Style,
+}
+
+impl Printer {
+    // Append one char of source text, expanding tabs and scrubbing controls
+    fn push(&mut self, ch: char, style: Style) {
+        match ch {
+            '\r' | '\n' => {}
+            '\t' => {
+                for _ in 0..TAB_STOP - self.column % TAB_STOP {
+                    self.glyph(' ', 1, style);
+                }
+            }
+            _ if ch.is_control() => self.glyph(CONTROL_REPLACEMENT, 1, style),
+            _ => self.glyph(ch, ch.width().unwrap_or(0), style),
+        }
+    }
+
+    // Place one glyph, wrapping first when it would overflow
+    fn glyph(&mut self, glyph: char, width: usize, style: Style) {
+        let bar_width = text_width(FRAME_WRAP_BAR);
+        if self.column + width > self.limit && self.column > bar_width {
+            self.end_line();
+            paint(&mut self.out, FRAME_WRAP_BAR, STYLE_FRAME, self.color);
+            self.column = bar_width;
+        }
+        if self.color && style != self.active {
+            if style == Style::PLAIN {
+                self.out.push_str(SGR_RESET);
+            } else {
+                style.write(&mut self.out);
+            }
+            self.active = style;
+        }
+        self.out.push(glyph);
+        self.column += width;
+    }
+
+    // Close any open style and finish the line
+    fn end_line(&mut self) {
+        if self.active != Style::PLAIN {
+            self.out.push_str(SGR_RESET);
+            self.active = Style::PLAIN;
+        }
+        self.out.push('\n');
+        self.column = 0;
+    }
+}
+
+// Split text into unstyled lines, the fallback for anything a highlighter cannot classify
+pub fn plain_lines(input: &str) -> Vec<StyledLine> {
+    input
+        .lines()
+        .map(|line| vec![(Style::PLAIN, line.to_owned())])
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_lines_wrap_behind_the_bar() {
+        let options = Options {
+            width: 10,
+            color: false,
+        };
+        let out = print(&plain_lines("0123456789abcdef\nx"), &options);
+        assert_eq!(out, "0123456789\n┆ abcdef\nx\n");
+    }
+
+    #[test]
+    fn controls_are_scrubbed() {
+        let options = Options {
+            width: 40,
+            color: true,
+        };
+        let out = print(&plain_lines("a\x1b[2Jb"), &options);
+        assert!(!out.contains('\x1b'), "{out:?}");
+    }
+}

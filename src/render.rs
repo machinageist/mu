@@ -32,7 +32,7 @@ const FRAME_TOP: &str = "╭─";
 const FRAME_BOTTOM: &str = "╰─";
 const FRAME_FILL: &str = "─";
 const FRAME_BAR: &str = "│ ";
-const FRAME_WRAP_BAR: &str = "┆ ";
+pub(crate) const FRAME_WRAP_BAR: &str = "┆ ";
 const FRAME_EDGE_WIDTH: usize = 2;
 
 // Inline decoration text
@@ -57,7 +57,7 @@ const FRONT_MATTER_LABEL: &str = "front matter";
 const HTML_COMMENT_OPEN: &str = "<!--";
 const HTML_COMMENT_CLOSE: &str = "-->";
 const LINE_BREAK_TAGS: [&str; 3] = ["<br>", "<br/>", "<br />"];
-const TAB_STOP: usize = 4;
+pub(crate) const TAB_STOP: usize = 4;
 
 // Narrowest content column, even when deeply nested on a narrow terminal
 const MIN_CONTENT_WIDTH: usize = 16;
@@ -118,8 +118,21 @@ struct Renderer<'o> {
 
 // Render a Markdown document into terminal-ready text
 pub fn render(input: &str, options: &Options) -> String {
-    let mut renderer = Renderer::new(options, input.len());
-    for event in Parser::new_ext(input, parse_options(input)) {
+    render_events(
+        Parser::new_ext(input, parse_options(input)),
+        options,
+        input.len(),
+    )
+}
+
+// Lay out any document event stream, whichever markup produced it
+pub(crate) fn render_events<'a>(
+    events: impl IntoIterator<Item = Event<'a>>,
+    options: &Options,
+    capacity: usize,
+) -> String {
+    let mut renderer = Renderer::new(options, capacity);
+    for event in events {
         renderer.event(event);
     }
     renderer.finish()

@@ -1,6 +1,6 @@
 // Author: machinageist
 // Date: 2026-11-09
-// Description: mu CLI, reads Markdown from a file or stdin and prints it formatted for the terminal
+// Description: mu CLI, reads markup or data from a file or stdin and prints it formatted for the terminal
 // Notes: Renders into one buffer, then either pages it or writes it in a single call;
 // a closed pipe (`| head`) is not an error
 
@@ -11,14 +11,17 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
-use mu::{Options, render};
+use mu::{Format, Options, detect, present};
 
 const USAGE: &str = "\
 Usage: mu [OPTIONS] [FILE]
 
-Render Markdown in the terminal. Reads FILE, or stdin when FILE is - or absent.
+Present Markdown, HTML, reStructuredText, Org, AsciiDoc, JSON, YAML or TOML in the
+terminal. Reads FILE, or stdin when FILE is - or absent. The format comes from the
+file extension, else from the content, else Markdown.
 
 Options:
+  -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
@@ -53,6 +56,7 @@ enum When {
 
 struct Args {
     path: Option<String>,
+    format: Option<Format>,
     width: Option<usize>,
     color: When,
     paging: When,
@@ -102,7 +106,8 @@ fn main() -> ExitCode {
         width: resolve_width(args.width),
         color: resolve_color(&args.color),
     };
-    let output = render(&input, &options);
+    let format = args.format.unwrap_or_else(|| detect(file, &input));
+    let output = present(&input, format, &options);
 
     // Page when wanted and the terminal can be taken over, otherwise fall through to a plain write
     if should_page(&args.paging, &output)
@@ -114,8 +119,9 @@ fn main() -> ExitCode {
             let next = auto_width(columns);
             (args.width.is_none() && next != width).then(|| {
                 width = next;
-                render(
+                present(
                     &input,
+                    format,
                     &Options {
                         width,
                         color: options.color,
@@ -150,6 +156,7 @@ fn main() -> ExitCode {
 fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> {
     let mut args = Args {
         path: None,
+        format: None,
         width: None,
         color: When::Auto,
         paging: When::Auto,
@@ -164,6 +171,14 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
         match flag.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
+            "-f" | "--format" => {
+                let value = inline_value
+                    .or_else(|| raw.next())
+                    .ok_or("--format needs a value")?;
+                let format =
+                    Format::from_name(&value).ok_or(format!("unknown format '{value}'"))?;
+                args.format = Some(format);
+            }
             "-w" | "--width" => {
                 let value = inline_value
                     .or_else(|| raw.next())
