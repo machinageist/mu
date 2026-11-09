@@ -47,5 +47,5 @@ README (usage, formats table, detection), FEATURE_SPEC updated to the shipped re
 → verify: `cargo build --release && ls -l target/release/mu`
 
 ## 10. Release 0.2.0
-Follow the release steps in `CONTRIBUTING.md`: bump to 0.2.0, date the changelog section, commit `Release 0.2.0`, tag `v0.2.0`.
+Follow the release steps in `CONTRIBUTING.md`: bump to 0.2.0, date the changelog section, commit `Release 0.2.0`, tag `v0.2.0`. ✅ done
 → verify: `cargo run --release -- --version` prints `mu 0.2.0`; `git describe` prints `v0.2.0`
