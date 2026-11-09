@@ -15,7 +15,14 @@ const COLOR_WIDTHS: [usize; 5] = [30, 47, 60, 80, 100];
 
 // Render with color off at a fixed width
 pub fn plain(input: &str, format: Format, width: usize) -> String {
-    present(input, format, &Options { width, color: false })
+    present(
+        input,
+        format,
+        &Options {
+            width,
+            color: false,
+        },
+    )
 }
 
 // Render with color on at a fixed width
@@ -54,15 +61,25 @@ pub fn assert_invariants(input: &str, format: Format) {
     }
     for width in COLOR_WIDTHS {
         let color = colored(input, format, width);
-        assert_eq!(strip_sgr(&color), plain(input, format, width), "{format:?} width {width}");
+        assert_eq!(
+            strip_sgr(&color),
+            plain(input, format, width),
+            "{format:?} width {width}"
+        );
         for line in color.lines() {
             if let Some(last) = line.rfind(ESC) {
-                assert!(line[last..].starts_with(SGR_RESET), "style left open: {line:?}");
+                assert!(
+                    line[last..].starts_with(SGR_RESET),
+                    "style left open: {line:?}"
+                );
             }
         }
     }
     let hostile = format!("{input}\n\x1b]52;c;ZXZpbA==\x07 x\x1b[2J\n");
-    for out in [plain(&hostile, format, 60), strip_sgr(&colored(&hostile, format, 60))] {
+    for out in [
+        plain(&hostile, format, 60),
+        strip_sgr(&colored(&hostile, format, 60)),
+    ] {
         assert!(!out.contains(ESC), "{format:?}: escape leaked");
         assert!(!out.contains('\x07'), "{format:?}: bell leaked");
     }
