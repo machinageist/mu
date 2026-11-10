@@ -2,10 +2,38 @@
 title: Changelog
 group: Project
 order: 2
-summary: Every release from 0.1.0 to 0.4.0
+summary: Every release from 0.1.0 to 0.6.0, and what's unreleased
 ---
 
 Every notable change, following [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Mirrors `CHANGELOG.md`.
+
+## Unreleased {#unreleased}
+
+Changes merged since 0.6.0, not yet in a release.
+
+### Fixed {#unreleased-fixed}
+
+- Source files (`.c`, `.h`, `.cpp`, `.rs`, `.py`, `.js`, `.go`, `.sh` and about 80 other extensions) are shown verbatim instead of being read as Markdown, which joined lines and ate `*` and `_`. So are piped scripts that start with `#!`. `-f code` (or `-f text`) shows any input verbatim
+
+## 0.6.0 · 2026-11-09 {#v0-6-0}
+
+### Added {#v0-6-0-added}
+
+- Pager: `h`/`l` and `←`/`→` scroll sideways by half a window when lines are wider than the screen, such as wide tables. The status bar shows `col N` while scrolled, and a search scrolls sideways to reach its match
+- XML (including plist, SVG source, RSS and Atom) is highlighted, and re-indented two spaces per level when tags balance and no element mixes text with child elements; anything else is shown as written. Recognised by `.xml`, `.plist`, `.svg`, `.rss`, `.atom` and similar, `application/xml`, `text/xml` and `+xml` media types, `-f xml`/`plist`, and an `<?xml` declaration or well-known root in piped input
+- CSV and TSV are shown as box-drawn tables: the first row is the header, numeric columns are right-aligned, quoting follows RFC 4180, and a CSV's delimiter (`,` `;` tab `|`) is detected. Tables use the full terminal width, and columns stop shrinking at 10 so wide tables overflow rather than crush. Recognised by `.csv`, `.tsv`, `.tab`, `text/csv`, `text/tab-separated-values`, `-f csv`/`tsv`, and in piped input
+
+## 0.5.0 · 2026-11-09 {#v0-5-0}
+
+### Added {#v0-5-0-added}
+
+- Pager search: `/` and `?` search forward and back, `n` and `N` move between matches with wrap-around, matches are highlighted, and the status bar shows the match count. Lowercase queries ignore case. `Esc` clears the highlighting
+- Pager outline: `o` lists the document's headings, starting on the section being read; `Enter` jumps to one and `o`, `q` or `Esc` closes the list. Works for every document format
+- `--toc` prints a document's outline (its headings, indented by level) and exits. Works for files, stdin and URLs; data formats print nothing
+
+### Fixed {#v0-5-0-fixed}
+
+- On macOS, resizing the window while paging re-renders at once; it used to wait for the next key press
 
 ## 0.4.0 · 2026-11-09 {#v0-4-0}
 

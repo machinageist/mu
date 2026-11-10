@@ -27,16 +27,20 @@ cargo fmt --check && cargo test --release && cargo clippy --all-targets -- -D wa
 |---|---|
 | `tests/render.rs` | Exact output for each Markdown construct, plus invariants swept across widths 30–120 |
 | `tests/html.rs`, `rst.rs`, `org.rs`, `asciidoc.rs` | One file per document format, with exact-output cases |
-| `tests/json.rs`, `yaml.rs`, `toml.rs` | One file per data format |
+| `tests/json.rs`, `yaml.rs`, `toml.rs`, `xml.rs` | One file per data format |
+| `tests/csv.rs` | CSV and TSV tables, including the 10-column floor and overflow |
+| `tests/code.rs` | Source files shown verbatim, never read as Markdown |
+| `tests/outline.rs` | Recorded headings point at the lines that show them, in every document format and across widths |
 | `tests/sniff.rs` | Sniffs every fixture against every format, so one format's rule can't quietly claim another's files |
-| `tests/cli_detect.rs` | Format selection through the CLI |
+| `tests/cli_detect.rs` | `--format` through the CLI, and unknown names rejected |
 | `tests/images.rs` | Image loading, fitting and fallbacks |
 | `tests/url.rs` | URL fetching, run against a local server |
-| `src/pager.rs` unit tests | Key decoding, scroll clamping, resize behaviour and the status bar |
+| `src/pager/` unit tests | Key decoding, scroll clamping, search, the outline, sideways cutting, resize behaviour and the status bar |
+| `tests/pager_pty.rs` | The real pager in a pseudo-terminal: resizing, search, the outline and sideways scrolling |
 
-The invariant sweeps check that no line exceeds the width, that color output with SGR stripped equals plain output, that every styled line resets before its newline, and that no control character from the input reaches the output. See [Safety & invariants](/wiki/safety#invariants). The pager's terminal I/O was checked by hand in a pseudo-terminal.
+The invariant sweeps check that no line exceeds the width, that color output with SGR stripped equals plain output, that every styled line resets before its newline, and that no control character from the input reaches the output. See [Safety & invariants](/wiki/safety#invariants).
 
-Fixtures live in `tests/fixtures/`: `kitchen-sink.md`, one `sample.*` per format, and `images/`.
+Fixtures live in `tests/fixtures/`: `kitchen-sink.md`, one or more `sample.*` per format (`sample.plist` and `sample.rss` for XML, `sample.c` and `sample.sh` for source code), and `images/`.
 
 ## Specs and plans {#workflow}
 
@@ -46,7 +50,7 @@ AGENTS/changes/<id>/SPEC.md          desired outcome, acceptance criteria
 AGENTS/changes/<id>/PLAN.md          atomic tasks and verification
 ```
 
-Past changes: `multi-format` (0.2.0), `images` (0.3.0) and `url-input` (0.4.0). When behaviour ships, `FEATURE_SPEC.md` is updated so it always describes the current state.
+Past changes: `multi-format` (0.2.0), `images` (0.3.0), `url-input` (0.4.0), `pager-navigation` (0.5.0) and `data-inputs` (0.6.0). The agreed order of releases up to 1.0 is in `FEATURE/ROADMAP.md`. When behaviour ships, `FEATURE_SPEC.md` is updated so it always describes the current state.
 
 ## Commits {#commits}
 
