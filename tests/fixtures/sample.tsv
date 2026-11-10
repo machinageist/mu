@@ -1,0 +1,4 @@
+tool	language	stars	license
+ripgrep	Rust	48000	MIT/Unlicense
+fzf	Go	65000	MIT
+jq	C	30000	MIT

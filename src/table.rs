@@ -12,7 +12,7 @@ use crate::inline::{Inline, Line, measure, wrap};
 use crate::style::{STYLE_FRAME, Style, paint};
 
 // Narrowest a column may be squeezed to before the table is allowed to overflow
-const MIN_COLUMN_WIDTH: usize = 3;
+pub const MIN_COLUMN_WIDTH: usize = 3;
 
 // One space of padding on each side of a cell
 const CELL_PADDING: usize = 2;
@@ -65,7 +65,14 @@ impl Table {
 }
 
 // Lay out and draw the table as finished lines, without container gutters
-pub fn render(table: &Table, inline: &Inline, limit: usize, color: bool) -> Vec<String> {
+// Notes: columns shrink no narrower than `min_column`, or their natural width when that is less
+pub fn render(
+    table: &Table,
+    inline: &Inline,
+    limit: usize,
+    min_column: usize,
+    color: bool,
+) -> Vec<String> {
     let longest_row = table
         .rows
         .iter()
@@ -86,7 +93,7 @@ pub fn render(table: &Table, inline: &Inline, limit: usize, color: bool) -> Vec<
         }
     }
     let chrome = columns * (CELL_PADDING + 1) + 1;
-    fit_columns(&mut widths, limit.saturating_sub(chrome));
+    fit_columns(&mut widths, limit.saturating_sub(chrome), min_column);
 
     // Borders around the header and the body
     let mut lines = vec![border(&widths, BORDER_TOP, color)];
@@ -101,7 +108,7 @@ pub fn render(table: &Table, inline: &Inline, limit: usize, color: bool) -> Vec<
 }
 
 // Shrink the widest column one step at a time until the total fits the budget
-fn fit_columns(widths: &mut [usize], budget: usize) {
+fn fit_columns(widths: &mut [usize], budget: usize, min_column: usize) {
     for width in widths.iter_mut() {
         *width = (*width).max(1);
     }
@@ -111,7 +118,7 @@ fn fit_columns(widths: &mut [usize], budget: usize) {
         else {
             break;
         };
-        if width <= MIN_COLUMN_WIDTH {
+        if width <= min_column {
             break;
         }
         widths[widest] -= 1;

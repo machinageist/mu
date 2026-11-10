@@ -20,14 +20,16 @@ use mu::{
 const USAGE: &str = "\
 Usage: mu [OPTIONS] [FILE | URL]
 
-Present Markdown, HTML, reStructuredText, Org, AsciiDoc, JSON, YAML or TOML in the
-terminal. Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL
+Present Markdown, HTML, reStructuredText, Org, AsciiDoc, JSON, YAML, TOML, CSV or TSV
+in the terminal. Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL
 with curl. The format comes from the file extension, else from the content, else
 Markdown; for a URL the response Content-Type is tried first.
 
 Options:
-  -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml
-  -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
+  -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml,
+                       csv, tsv
+  -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100 except
+                       for CSV and TSV tables)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
       --images <MODE>  auto, fetch or never (default: auto, local files and data: URIs only;
@@ -171,6 +173,13 @@ fn main() -> ExitCode {
     }
 }
 
+impl Source {
+    // Whether any part is a table that should use the full terminal width
+    fn is_wide(&self) -> bool {
+        self.parts.iter().any(|(_, format)| format.is_wide())
+    }
+}
+
 // Read a file or stdin, detecting its format
 fn load_file(args: &Args) -> Result<Source, String> {
     let file = args.path.as_deref().filter(|path| *path != STDIN_PATH);
@@ -257,7 +266,10 @@ fn present_all(source: &Source, options: &Options) -> Rendered {
 fn show(args: &Args, source: &Source) -> ExitCode {
     let options = Options {
         images: resolve_images(source.images, source.base.clone()),
-        ..Options::new(resolve_width(args.width), resolve_color(&args.color))
+        ..Options::new(
+            resolve_width(args.width, source.is_wide()),
+            resolve_color(&args.color),
+        )
     };
 
     // The outline only needs headings, so images stay off and nothing is fetched for them
@@ -276,7 +288,7 @@ fn show(args: &Args, source: &Source) -> ExitCode {
     {
         let mut width = options.width;
         let mut relayout = |columns: usize| {
-            let next = auto_width(columns);
+            let next = auto_width(columns, source.is_wide());
             (args.width.is_none() && next != width).then(|| {
                 width = next;
                 present_all(
@@ -514,16 +526,17 @@ fn read_input(path: Option<&str>) -> io::Result<String> {
 }
 
 // Choose the wrap width from the flag or the terminal
-fn resolve_width(requested: Option<usize>) -> usize {
+fn resolve_width(requested: Option<usize>, wide: bool) -> usize {
     match requested {
         Some(width) => width.max(MIN_WIDTH),
-        None => term::size().map_or(FALLBACK_WIDTH, |size| auto_width(size.columns)),
+        None => term::size().map_or(FALLBACK_WIDTH, |size| auto_width(size.columns, wide)),
     }
 }
 
-// Fit the default width to a terminal: full width up to a readable cap
-fn auto_width(columns: usize) -> usize {
-    columns.clamp(MIN_WIDTH, MAX_AUTO_WIDTH)
+// Fit the default width to a terminal: full width up to a readable cap, or all of it for tables
+fn auto_width(columns: usize, wide: bool) -> usize {
+    let cap = if wide { usize::MAX } else { MAX_AUTO_WIDTH };
+    columns.clamp(MIN_WIDTH, cap)
 }
 
 // Decide whether output goes through the built-in pager

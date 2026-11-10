@@ -4,6 +4,9 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Added
+- CSV and TSV are shown as box-drawn tables: the first row is the header, numeric columns are right-aligned, quoting follows RFC 4180, and a CSV's delimiter (`,` `;` tab `|`) is detected. Tables use the full terminal width, and columns stop shrinking at 10 so wide tables overflow rather than crush. Recognised by `.csv`, `.tsv`, `.tab`, `text/csv`, `text/tab-separated-values`, `-f csv`/`tsv`, and in piped input
+
 ## 0.5.0 - 2026-11-09
 
 ### Added

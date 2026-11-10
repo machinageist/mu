@@ -148,6 +148,8 @@ struct Renderer<'o> {
     link_urls: Vec<Option<String>>,
     image_mark: usize,
     images: Vec<ImageSpan>,
+    // Narrowest a table column may shrink to; wider for data tables, which overflow instead
+    table_min_column: usize,
 }
 
 // An image in the current inline block: its source, alt text and atom range
@@ -180,6 +182,21 @@ pub(crate) fn render_events<'a>(
     capacity: usize,
 ) -> Rendered {
     let mut renderer = Renderer::new(options, capacity);
+    for event in events {
+        renderer.event(event);
+    }
+    renderer.finish()
+}
+
+// Lay out events for a data table, whose columns stop shrinking at `min_column` and overflow instead
+pub(crate) fn render_table_events<'a>(
+    events: impl IntoIterator<Item = Event<'a>>,
+    options: &Options,
+    capacity: usize,
+    min_column: usize,
+) -> Rendered {
+    let mut renderer = Renderer::new(options, capacity);
+    renderer.table_min_column = min_column;
     for event in events {
         renderer.event(event);
     }
@@ -292,6 +309,7 @@ impl<'o> Renderer<'o> {
             link_urls: Vec::new(),
             image_mark: 0,
             images: Vec::new(),
+            table_min_column: table::MIN_COLUMN_WIDTH,
         }
     }
 
@@ -874,7 +892,13 @@ impl<'o> Renderer<'o> {
         let Some(table) = self.table.take() else {
             return;
         };
-        let lines = table::render(&table, &self.inline, self.avail(), self.options.color);
+        let lines = table::render(
+            &table,
+            &self.inline,
+            self.avail(),
+            self.table_min_column,
+            self.options.color,
+        );
         for line in lines {
             self.line_prefix();
             self.out.push_str(&line);

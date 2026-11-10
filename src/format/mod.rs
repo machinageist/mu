@@ -5,6 +5,7 @@
 // data formats emit styled lines into the data printer
 
 mod asciidoc;
+mod csv;
 mod html;
 mod org;
 mod rst;
@@ -12,7 +13,7 @@ mod rst;
 use std::path::Path;
 
 use crate::data;
-use crate::render::{Options, Rendered, render_events, render_markdown};
+use crate::render::{Options, Rendered, render_events, render_markdown, render_table_events};
 
 // Sniffing looks only at the head of the input, cut back to a char boundary
 const SNIFF_BYTES: usize = 8 * 1024;
@@ -27,10 +28,12 @@ pub enum Format {
     Json,
     Yaml,
     Toml,
+    Csv,
+    Tsv,
 }
 
 // Names accepted by --format, first one is canonical
-const NAMES: [(Format, &[&str]); 8] = [
+const NAMES: [(Format, &[&str]); 10] = [
     (Format::Markdown, &["markdown", "md"]),
     (Format::Html, &["html", "htm"]),
     (Format::Rst, &["rst", "restructuredtext"]),
@@ -39,10 +42,12 @@ const NAMES: [(Format, &[&str]); 8] = [
     (Format::Json, &["json"]),
     (Format::Yaml, &["yaml", "yml"]),
     (Format::Toml, &["toml"]),
+    (Format::Csv, &["csv"]),
+    (Format::Tsv, &["tsv"]),
 ];
 
 // File extensions, matched case-insensitively
-const EXTENSIONS: [(Format, &[&str]); 8] = [
+const EXTENSIONS: [(Format, &[&str]); 10] = [
     (Format::Markdown, &["md", "markdown", "mdown", "mkd"]),
     (Format::Html, &["html", "htm", "xhtml"]),
     (Format::Rst, &["rst", "rest"]),
@@ -51,10 +56,12 @@ const EXTENSIONS: [(Format, &[&str]); 8] = [
     (Format::Json, &["json", "jsonl", "geojson"]),
     (Format::Yaml, &["yaml", "yml"]),
     (Format::Toml, &["toml"]),
+    (Format::Csv, &["csv"]),
+    (Format::Tsv, &["tsv", "tab"]),
 ];
 
 // Media types from a Content-Type header, matched without parameters, case-insensitively
-const MEDIA_TYPES: [(Format, &[&str]); 8] = [
+const MEDIA_TYPES: [(Format, &[&str]); 10] = [
     (Format::Markdown, &["text/markdown", "text/x-markdown"]),
     (Format::Html, &["text/html", "application/xhtml+xml"]),
     (Format::Rst, &["text/x-rst", "text/prs.fallenstein.rst"]),
@@ -78,6 +85,8 @@ const MEDIA_TYPES: [(Format, &[&str]); 8] = [
         ],
     ),
     (Format::Toml, &["application/toml", "text/x-toml"]),
+    (Format::Csv, &["text/csv"]),
+    (Format::Tsv, &["text/tab-separated-values"]),
 ];
 
 // Structured-syntax suffix for JSON media types such as application/problem+json
@@ -130,6 +139,11 @@ impl Format {
         Format::from_path(path)
     }
 
+    // Tables that use the full terminal width rather than the reading-width cap
+    pub fn is_wide(self) -> bool {
+        matches!(self, Format::Csv | Format::Tsv)
+    }
+
     // Canonical name, as shown in help and errors
     pub fn name(self) -> &'static str {
         NAMES
@@ -168,7 +182,8 @@ pub fn sniff(input: &str) -> Format {
     } else if data::yaml::sniff(head) {
         Format::Yaml
     } else {
-        Format::Markdown
+        // Tables last: only input nothing else claimed is checked for even columns
+        csv::sniff(head).unwrap_or(Format::Markdown)
     }
 }
 
@@ -192,6 +207,12 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
         Format::Json => no_headings(data::print(&data::json::highlight(input), options)),
         Format::Yaml => no_headings(data::print(&data::yaml::highlight(input), options)),
         Format::Toml => no_headings(data::print(&data::toml::highlight(input), options)),
+        Format::Csv | Format::Tsv => render_table_events(
+            csv::events(input, format),
+            options,
+            input.len(),
+            csv::CSV_MIN_COLUMN,
+        ),
     }
 }
 

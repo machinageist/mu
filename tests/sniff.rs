@@ -7,7 +7,7 @@
 use mu::{Format, detect, sniff};
 
 // Each fixture and the format sniffing must pick for it
-const FIXTURES: [(&str, &str, Format); 10] = [
+const FIXTURES: [(&str, &str, Format); 12] = [
     (
         "kitchen-sink.md",
         include_str!("fixtures/kitchen-sink.md"),
@@ -53,6 +53,16 @@ const FIXTURES: [(&str, &str, Format); 10] = [
         "sample.toml",
         include_str!("fixtures/sample.toml"),
         Format::Toml,
+    ),
+    (
+        "sample.csv",
+        include_str!("fixtures/sample.csv"),
+        Format::Csv,
+    ),
+    (
+        "sample.tsv",
+        include_str!("fixtures/sample.tsv"),
+        Format::Tsv,
     ),
 ];
 
