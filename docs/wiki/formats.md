@@ -5,7 +5,7 @@ order: 2
 summary: Every format mu reads, and how it picks one
 ---
 
-Six document formats share one layout engine. Four data formats share one printer. Two table formats, CSV and TSV, go through the same table engine as Markdown tables. Source code is shown verbatim.
+Seven document formats share one layout engine. Four data formats share one printer. Two table formats, CSV and TSV, go through the same table engine as Markdown tables. Source code is shown verbatim.
 
 ## Supported formats {#supported}
 
@@ -17,6 +17,7 @@ Six document formats share one layout engine. Four data formats share one printe
 | Org-mode | document | `.org` | `#+KEYWORD:` or `#+BEGIN_` lines, `:PROPERTIES:`, or `*` headings with Org links |
 | AsciiDoc | document | `.adoc` `.asciidoc` `.asc` | `= Title` first line, `:attr:` header lines, `[source,…]` blocks, `\|===` tables |
 | Man pages (roff) | document | `.1` to `.9`, also with letters (`.3p`, `.1ssl`), `.man` `.mdoc` | a `.TH` or `.Dd` request before any text |
+| Jupyter notebook | document | `.ipynb` | a JSON object with `"cells"` and `"cell_type"` |
 | JSON | data | `.json` `.jsonl` `.geojson` | starts with `{` or `[` and parses as JSON |
 | YAML | data | `.yaml` `.yml` | mostly `key: value` / `- item` lines with a top-level key or `---` |
 | TOML | data | `.toml` | mostly `[table]` and `key = value` lines |
@@ -25,13 +26,13 @@ Six document formats share one layout engine. Four data formats share one printe
 | TSV | table | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields |
 | Source code | verbatim text | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line |
 
-XML, CSV and TSV were added in 0.6.0. Source code and man pages are listed under Unreleased in the changelog and ship in the next release.
+XML, CSV and TSV were added in 0.6.0. Source code, man pages and Jupyter notebooks are listed under Unreleased in the changelog and ship in the next release.
 
 ## Format selection {#selection}
 
 The first rule that gives an answer wins:
 
-1. The `-f` / `--format <name>` flag. Names are `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man` and `code`, plus the aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc` and `text`.
+1. The `-f` / `--format <name>` flag. Names are `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man`, `ipynb` and `code`, plus the aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc`, `jupyter`, `notebook` and `text`.
 2. For a URL, the response `Content-Type`. `text/plain` and `application/octet-stream` say nothing and are skipped. See [URLs](/wiki/urls#url-format).
 3. The file extension, case-insensitive. For a URL, the extension of its path, never its host.
 4. Content sniffing on the first 8 KB. This is used for stdin and for unknown or missing extensions such as `.txt`.
@@ -48,16 +49,17 @@ Sniffing runs the rules below in a fixed order, most specific first. Every rule 
 |---|---|---|
 | 1 | Man output | 8+ backspace overstrikes, as `man ls \| mu` sends, or SGR bold and underline under a `LS(1) … LS(1)` header line |
 | 2 | Source code | The input starts with `#!`, like a script |
-| 3 | JSON | Starts with `{` or `[` and tokenizes as JSON so far |
-| 4 | Man page | Skipping comments, blank lines, other requests and `.de` macro definitions, a `.TH` or `.Dd` request comes before any text |
-| 5 | HTML | A doctype, `html`, `head` or `body` tag comes first |
-| 6 | XML | An `<?xml` declaration with no `<html` after it, a `<!DOCTYPE` that isn't HTML, or a first element named `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` |
-| 7 | Org | `#+KEYWORD` or `#+BEGIN_` line, a `PROPERTIES` drawer, or a star heading plus a described or URL link |
-| 8 | RST | `.. directive::` or `.. _target:` line, an over-and-underlined title after a blank line, or link/role syntax with no Markdown headings or fences |
-| 9 | AsciiDoc | `= Title` first line, `:attr:` header, source block attribute plus delimiter, or a table fence |
-| 10 | TOML | 2+ lines, 80% are tables or `key = value`, and at least one `key = value` |
-| 11 | YAML | 3+ lines, 80% YAML-shaped, a key, a top-level key or `---` or item mapping, and no fences, quotes or tables |
-| 12 | TSV, then CSV | See [below](#table-sniffing) |
+| 3 | Jupyter | A JSON object whose head has `"cells"` and `"cell_type"` |
+| 4 | JSON | Starts with `{` or `[` and tokenizes as JSON so far |
+| 5 | Man page | Skipping comments, blank lines, other requests and `.de` macro definitions, a `.TH` or `.Dd` request comes before any text |
+| 6 | HTML | A doctype, `html`, `head` or `body` tag comes first |
+| 7 | XML | An `<?xml` declaration with no `<html` after it, a `<!DOCTYPE` that isn't HTML, or a first element named `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` |
+| 8 | Org | `#+KEYWORD` or `#+BEGIN_` line, a `PROPERTIES` drawer, or a star heading plus a described or URL link |
+| 9 | RST | `.. directive::` or `.. _target:` line, an over-and-underlined title after a blank line, or link/role syntax with no Markdown headings or fences |
+| 10 | AsciiDoc | `= Title` first line, `:attr:` header, source block attribute plus delimiter, or a table fence |
+| 11 | TOML | 2+ lines, 80% are tables or `key = value`, and at least one `key = value` |
+| 12 | YAML | 3+ lines, 80% YAML-shaped, a key, a top-level key or `---` or item mapping, and no fences, quotes or tables |
+| 13 | TSV, then CSV | See [below](#table-sniffing) |
 | — | Markdown | Everything else |
 
 > [!TIP]
@@ -147,6 +149,17 @@ Man pages in roff source are laid out like any other document. mu reads the macr
 `man ls | mu` works too. When `man` writes to a pipe it marks bold as `X` backspace `X` and underline as `_` backspace `X`, which shows up as junk in most tools. mu turns these back into bold and underline and keeps `man`'s own layout, line for line. Lines that are entirely bold become the outline: sections at the margin, subsections indented up to 3 columns. SGR styling, from `groff -T utf8` or `MAN_KEEP_FORMATTING=1`, is understood the same way.
 
 Pages under `/usr/share/man` work directly: `mu /usr/share/man/man1/ls.1`. Compressed pages (`ls.1.gz`) aren't read yet, so use `gunzip -c ls.1.gz | mu`. A page that is only `.so other.1` shows "See other.1".
+
+## Jupyter notebooks {#jupyter}
+
+A notebook (`.ipynb`, nbformat 4) reads as one document, top to bottom:
+
+- Markdown cells are rendered as Markdown, and their headings fill the [outline](/wiki/pager#outline). Images attached to a cell (`attachment:plot.png`) are drawn.
+- Code cells show an italic `In [n]:` line with the execution count (`In [ ]:` if the cell never ran), then the code in a block labelled with the notebook's language.
+- Outputs follow their cell. Printed text and results are code blocks, and `stderr` is labelled. Errors show the exception and traceback with the terminal colors removed. Markdown output is rendered.
+- Plots and other PNG, JPEG or SVG outputs go through the [image pipeline](/wiki/images), so they draw as pictures, or show as `[image: output]` with `--images never`.
+- HTML-only output, such as a pandas table with no text version, is shown as its HTML source.
+- Other notebook versions, and files that aren't valid notebooks, are shown as JSON.
 
 ## Tables {#tables}
 

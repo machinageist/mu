@@ -7,6 +7,7 @@
 mod asciidoc;
 mod csv;
 mod html;
+mod jupyter;
 mod man;
 mod org;
 mod rst;
@@ -34,10 +35,11 @@ pub enum Format {
     Xml,
     Code,
     Man,
+    Jupyter,
 }
 
 // Names accepted by --format, first one is canonical
-const NAMES: [(Format, &[&str]); 13] = [
+const NAMES: [(Format, &[&str]); 14] = [
     (Format::Markdown, &["markdown", "md"]),
     (Format::Html, &["html", "htm"]),
     (Format::Rst, &["rst", "restructuredtext"]),
@@ -51,10 +53,11 @@ const NAMES: [(Format, &[&str]); 13] = [
     (Format::Xml, &["xml", "plist"]),
     (Format::Code, &["code", "text"]),
     (Format::Man, &["man", "roff", "mdoc"]),
+    (Format::Jupyter, &["ipynb", "jupyter", "notebook"]),
 ];
 
 // File extensions, matched case-insensitively
-const EXTENSIONS: [(Format, &[&str]); 13] = [
+const EXTENSIONS: [(Format, &[&str]); 14] = [
     (Format::Markdown, &["md", "markdown", "mdown", "mkd"]),
     (Format::Html, &["html", "htm", "xhtml"]),
     (Format::Rst, &["rst", "rest"]),
@@ -166,10 +169,11 @@ const EXTENSIONS: [(Format, &[&str]); 13] = [
         ],
     ),
     (Format::Man, &["man", "mdoc"]),
+    (Format::Jupyter, &["ipynb"]),
 ];
 
 // Media types from a Content-Type header, matched without parameters, case-insensitively
-const MEDIA_TYPES: [(Format, &[&str]); 13] = [
+const MEDIA_TYPES: [(Format, &[&str]); 14] = [
     (Format::Markdown, &["text/markdown", "text/x-markdown"]),
     (Format::Html, &["text/html", "application/xhtml+xml"]),
     (Format::Rst, &["text/x-rst", "text/prs.fallenstein.rst"]),
@@ -222,6 +226,7 @@ const MEDIA_TYPES: [(Format, &[&str]); 13] = [
         ],
     ),
     (Format::Man, &["text/troff", "application/x-troff-man"]),
+    (Format::Jupyter, &["application/x-ipynb+json"]),
 ];
 
 // Structured-syntax suffix for JSON media types such as application/problem+json
@@ -323,6 +328,8 @@ pub fn sniff(input: &str) -> Format {
         Format::Man
     } else if data::code::sniff(head) {
         Format::Code
+    } else if jupyter::sniff(head) {
+        Format::Jupyter
     } else if data::json::sniff(head) {
         Format::Json
     } else if man::sniff(head) {
@@ -365,6 +372,10 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
         Format::Org => render_events(org::events(input), options, input.len()),
         Format::AsciiDoc => render_events(asciidoc::events(input), options, input.len()),
         Format::Man if data::overstrike::is_formatted(input) => man_output(input, options),
+        Format::Jupyter => match jupyter::markdown(input) {
+            Some(markdown) => render_markdown(&markdown, options),
+            None => no_headings(data::print(&data::json::highlight(input), options)),
+        },
         Format::Man => render_events(man::events(input), options, input.len()),
         Format::Json => no_headings(data::print(&data::json::highlight(input), options)),
         Format::Yaml => no_headings(data::print(&data::yaml::highlight(input), options)),
@@ -443,6 +454,12 @@ mod tests {
         );
         assert_eq!(Format::from_media_type("text/x-csrc"), Some(Format::Code));
         assert_eq!(Format::from_media_type("text/troff"), Some(Format::Man));
+        assert_eq!(
+            Format::from_media_type("application/x-ipynb+json"),
+            Some(Format::Jupyter)
+        );
+        assert_eq!(Format::from_path("analysis.ipynb"), Some(Format::Jupyter));
+        assert_eq!(Format::from_name("notebook"), Some(Format::Jupyter));
         assert_eq!(Format::from_media_type("text/plain"), None);
         assert_eq!(Format::from_media_type("application/octet-stream"), None);
     }

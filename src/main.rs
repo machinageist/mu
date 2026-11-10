@@ -20,14 +20,14 @@ use mu::{
 const USAGE: &str = "\
 Usage: mu [OPTIONS] [FILE | URL]
 
-Present Markdown, HTML, reStructuredText, Org, AsciiDoc, man pages, JSON, YAML, TOML,
-CSV, TSV, XML or source code in the terminal. Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL
+Present Markdown, HTML, reStructuredText, Org, AsciiDoc, man pages, Jupyter notebooks,
+JSON, YAML, TOML, CSV, TSV, XML or source code in the terminal. Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL
 with curl. The format comes from the file extension, else from the content, else
 Markdown; for a URL the response Content-Type is tried first.
 
 Options:
   -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml,
-                       csv, tsv, xml, man, code (verbatim text, also: text)
+                       csv, tsv, xml, man, ipynb, code (verbatim text, also: text)
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100 except
                        for CSV and TSV tables)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)

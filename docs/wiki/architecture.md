@@ -49,7 +49,7 @@ src/
   term.rs     terminal size via TIOCGWINSZ
   lib.rs      public API: render, present, present_outlined, outline, detect, sniff, Format, Options
   outline.rs  heading list shared by --toc and the pager
-  format/     Format enum, detection, dispatch; html, rst, org, asciidoc, man, csv → events
+  format/     Format enum, detection, dispatch; html, rst, org, asciidoc, man, csv → events; jupyter → Markdown
   data/       styled-line printer; json, yaml, toml, xml highlighters; verbatim code lines
   image/      sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs   event walker: blocks, containers, lists, code frames, headings

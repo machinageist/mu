@@ -24,7 +24,7 @@ Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL.
 
 | Flag | Meaning | Default |
 |---|---|---|
-| `-f`, `--format <NAME>` | Force a format: `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man`, `code`. The aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc` and `text` work too, in any case. `code` shows the input verbatim. An unknown name is a usage error. | detected (see [Formats](/wiki/formats#selection)) |
+| `-f`, `--format <NAME>` | Force a format: `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man`, `ipynb`, `code`. The aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc`, `jupyter`, `notebook` and `text` work too, in any case. `code` shows the input verbatim. An unknown name is a usage error. | detected (see [Formats](/wiki/formats#selection)) |
 | `--images <MODE>` | `auto`, `fetch` or `never`. `fetch` also downloads http(s) images. | `auto`, or `fetch` for a URL |
 | `--base <DIR\|URL>` | Resolve relative image paths here. | the input file's folder, or the final URL |
 | `--toc` | Print the document's outline and exit. See [Outline](#toc). |  |

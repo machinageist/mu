@@ -115,6 +115,7 @@ The bottom row shows the file name, the visible line range, how far through you 
 | CSV | `.csv` | 3+ lines with the same number of `,` or `;` fields (checked last, so prose stays Markdown) | table |
 | TSV | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields | table |
 | Man pages | `.1`–`.9` (and `.3p`, `.1ssl`…) `.man` `.mdoc` | a `.TH` or `.Dd` first request, after comments and macro definitions | document |
+| Jupyter notebook | `.ipynb` | a JSON object with `"cells"` and `"cell_type"` (checked before JSON) | document: prose, code, outputs and plots |
 | Man output (`man ls \| mu`) | — | backspace overstrikes, checked first | text with bold and underline, as `man` laid it out |
 | Source code | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line (checked first) | text, verbatim |
 
@@ -177,7 +178,7 @@ src/
   pager/     built-in pager: raw mode, keys, scrolling, search, outline, resize, status bar
   term.rs    terminal size via TIOCGWINSZ
   lib.rs     public API: render, present, present_outlined, outline, detect, sniff, Format, Options
-  format/    Format enum, detection, dispatch; html, rst, org, asciidoc, man, csv → events
+  format/    Format enum, detection, dispatch; html, rst, org, asciidoc, man, csv → events; jupyter → Markdown
   data/      styled-line printer; json, yaml, toml, xml highlighters
   image/     sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs  event walker: blocks, containers, lists, code frames

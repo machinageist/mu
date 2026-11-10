@@ -14,7 +14,7 @@ Ships as **0.7.0**, the third release on `FEATURE/ROADMAP.md`.
 |---|---|---|---|---|
 | Code | `code`, `text` | see below | see below | the head starts with `#!` |
 | Man | `man`, `roff`, `mdoc` | `.1` to `.9`, optionally followed by letters (`.3p`, `.1ssl`), plus `.man` `.mdoc` | `text/troff`, `application/x-troff-man` | see Man pages |
-| Jupyter | `ipynb`, `jupyter`, `notebook` | `.ipynb` | `application/x-ipynb+json`, matched before the `+json` rule | before JSON: a JSON object whose head has both `"cells"` and `"nbformat"` |
+| Jupyter | `ipynb`, `jupyter`, `notebook` | `.ipynb` | `application/x-ipynb+json`, matched before the `+json` rule | before JSON: a JSON object whose head has both `"cells"` and `"cell_type"` (`nbformat` is often at the end, past the sniffed head) |
 
 ## Source files (Code)
 
@@ -96,12 +96,12 @@ Ships as **0.7.0**, the third release on `FEATURE/ROADMAP.md`.
 
 ## Jupyter notebooks
 
-- **Supported versions:** nbformat 4. Any other version, or a JSON document without `cells`, is shown as JSON with a note on stderr.
-- **Parser:** a small JSON value parser, new in `src/data/json.rs`, with a depth limit of 256 and no dependency.
+- **Supported versions:** nbformat 4. Any other version, or a JSON document without `cells`, is shown as JSON.
+- **Parser:** a small JSON value parser, new in `src/data/value.rs`, with a depth limit of 256 and no dependency.
 - **Cells:**
   - **Markdown cells** are Markdown, and their headings fill the outline. `attachment:name` images become `data:` URIs from the cell's attachments.
   - **Code cells** become a fenced code block whose info string is the notebook's language: `metadata.kernelspec.language`, else `language_info.name`, else none.
-    - Above the block, a dim line `In [n]:` shows the execution count, or `In [ ]:` when the cell was not run.
+    - Above the block, an italic line `In [n]:` shows the execution count, or `In [ ]:` when the cell was not run.
   - **Raw cells** become a code block with no language.
 - **Outputs, below the code block:**
   - **Stream outputs** (`stdout`, `stderr`) become a code block with no language. `stderr` is labelled.
@@ -109,7 +109,7 @@ Ships as **0.7.0**, the third release on `FEATURE/ROADMAP.md`.
     - Images become `data:` URI images in the image pipeline, so they draw as pictures or fall back to alt text as usual.
     - `text/markdown` is rendered.
     - `text/plain` becomes a code block.
-    - `text/html` alone is converted through the HTML presenter.
+    - `text/html` alone shows as an `html` code block.
   - **`error` outputs** show `ename: evalue` and the traceback with its ANSI codes removed, as a code block.
 - **Code blocks:** every block uses a fence longer than any backtick run inside it, so cell content can never close it early.
 - **How it renders:**

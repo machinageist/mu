@@ -8,6 +8,7 @@ pub mod code;
 pub mod json;
 pub mod overstrike;
 pub mod toml;
+pub mod value;
 pub mod xml;
 pub mod yaml;
 
