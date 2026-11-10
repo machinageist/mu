@@ -7,10 +7,12 @@ mod data;
 mod format;
 mod image;
 mod inline;
+mod outline;
 mod render;
 mod style;
 mod table;
 
 pub use format::{Format, detect, present, present_outlined, sniff};
 pub use image::{CellSize, ImageMode, ImageOptions, Protocol};
+pub use outline::{outline, outline_entries};
 pub use render::{Heading, Options, Rendered, render};

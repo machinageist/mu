@@ -12,7 +12,10 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
-use mu::{CellSize, Format, ImageMode, ImageOptions, Options, Protocol, detect, present, sniff};
+use mu::{
+    CellSize, Format, ImageMode, ImageOptions, Options, Protocol, Rendered, detect, outline,
+    present_outlined, sniff,
+};
 
 const USAGE: &str = "\
 Usage: mu [OPTIONS] [FILE | URL]
@@ -30,6 +33,7 @@ Options:
       --images <MODE>  auto, fetch or never (default: auto, local files and data: URIs only;
                        fetch also downloads http(s) images with curl)
                        (default for a URL: fetch)
+      --toc            Print the document's outline (its headings) and exit
       --base <DIR|URL> Resolve relative image paths here (default: the file's folder or the URL)
   -h, --help           Show this help
   -V, --version        Show the version
@@ -101,6 +105,7 @@ struct Args {
     no_rewrite: bool,
     // The first URL-only flag seen, named in the error when there is no URL
     url_flag: Option<String>,
+    toc: bool,
 }
 
 // Input ready to render: one or more parts, each in its own format
@@ -223,15 +228,27 @@ fn load_url(args: &Args, url: &str) -> Result<Source, String> {
     })
 }
 
-// Render every part of a source and join them
-fn present_all(source: &Source, options: &Options) -> String {
-    source
-        .parts
-        .iter()
-        .map(|(input, format)| present(input, *format, options))
-        .filter(|output| !output.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+// Render every part of a source and join them, shifting each part's heading lines to match
+fn present_all(source: &Source, options: &Options) -> Rendered {
+    let mut joined = Rendered::default();
+    for (input, format) in &source.parts {
+        let part = present_outlined(input, *format, options);
+        if part.text.is_empty() {
+            continue;
+        }
+        if !joined.text.is_empty() {
+            joined.text.push('\n');
+        }
+        let offset = joined.text.matches('\n').count();
+        joined
+            .headings
+            .extend(part.headings.into_iter().map(|mut heading| {
+                heading.line += offset;
+                heading
+            }));
+        joined.text.push_str(&part.text);
+    }
+    joined
 }
 
 // Render a source and page it or write it out
@@ -240,8 +257,16 @@ fn show(args: &Args, source: &Source) -> ExitCode {
         images: resolve_images(source.images, source.base.clone()),
         ..Options::new(resolve_width(args.width), resolve_color(&args.color))
     };
+
+    // The outline only needs headings, so images stay off and nothing is fetched for them
+    if args.toc {
+        let mut plain = options.clone();
+        plain.images.mode = ImageMode::Never;
+        return write_out(&outline(&present_all(source, &plain).headings, &options));
+    }
+
     // Half-blocks first: they work in the pager, and decide whether paging is needed
-    let output = present_all(source, &options);
+    let output = present_all(source, &options).text;
 
     // Page when wanted and the terminal can be taken over, otherwise fall through to a plain write
     if should_page(&args.paging, &output)
@@ -259,6 +284,7 @@ fn show(args: &Args, source: &Source) -> ExitCode {
                         ..options.clone()
                     },
                 )
+                .text
             })
         };
         return match session.run(&source.title, output, &mut relayout) {
@@ -275,11 +301,16 @@ fn show(args: &Args, source: &Source) -> ExitCode {
     let output = if protocol != Protocol::HalfBlock && options.images.mode != ImageMode::Never {
         let mut native = options.clone();
         native.images.protocol = protocol;
-        present_all(source, &native)
+        present_all(source, &native).text
     } else {
         output
     };
 
+    write_out(&output)
+}
+
+// Write output to stdout in one call, treating a closed pipe as success
+fn write_out(output: &str) -> ExitCode {
     let mut stdout = io::stdout().lock();
     match stdout
         .write_all(output.as_bytes())
@@ -304,6 +335,7 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
         paging: When::Auto,
         images: None,
         base: None,
+        toc: false,
         request: fetch::Request::default(),
         include: false,
         no_rewrite: false,
@@ -355,6 +387,7 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
                 args.images =
                     Some(parse_image_mode(&value).ok_or(format!("invalid images mode '{value}'"))?);
             }
+            "--toc" => args.toc = true,
             "--base" => {
                 let value = inline_value
                     .or_else(|| raw.next())

@@ -17,12 +17,14 @@ const COMMON_ARGS: [&str; 4] = ["-w", "60", "--color", "never"];
 const HTML_BODY: &str = "<h1>Hello</h1><p>From the <b>server</b>.</p>";
 const JSON_BODY: &str = "{\"name\":\"mu\",\"tags\":[1,2]}";
 const MISSING_BODY: &str = "# Not here\n";
+const OUTLINE_BODY: &str = "# Guide\n\nIntro.\n\n## Install\n\n## Use\n";
 
 // Answer a request path with (status line, content type, body)
 fn route(path: &str) -> (&'static str, &'static str, &'static str) {
     match path {
         "/page" => ("200 OK", "text/html; charset=utf-8", HTML_BODY),
         "/data" => ("200 OK", "application/json", JSON_BODY),
+        "/guide" => ("200 OK", "text/markdown", OUTLINE_BODY),
         "/old" => ("301 Moved Permanently", "text/plain", ""),
         _ => ("404 Not Found", "text/markdown", MISSING_BODY),
     }
@@ -169,4 +171,12 @@ fn url_flags_without_a_url_are_a_usage_error() {
     assert!(err.contains("-I only works with a URL"), "{err}");
     let (code, _, _) = run(&["-H", "A: b", "README.md"], "");
     assert_eq!(code, EXIT_USAGE);
+}
+
+#[test]
+fn toc_lists_the_headings_of_a_fetched_page() {
+    let url = format!("{}/guide", serve());
+    let (code, out, _) = run(&["--toc", &url], "");
+    assert_eq!(code, 0);
+    assert_eq!(out, "Guide\n  Install\n  Use\n");
 }

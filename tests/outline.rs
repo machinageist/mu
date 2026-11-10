@@ -6,7 +6,11 @@
 mod common;
 
 use common::strip_sgr;
+use std::process::{Command, Stdio};
+
 use mu::{Format, Options, present, present_outlined};
+
+const BIN: &str = env!("CARGO_BIN_EXE_mu");
 
 const SWEEP_WIDTHS: std::ops::RangeInclusive<usize> = 30..=120;
 const DOCUMENTS: [(&str, Format); 5] = [
@@ -88,4 +92,41 @@ fn markdown_headings_keep_level_and_text() {
         .collect();
     assert_eq!(outline, [(1, "Top"), (2, "Second part"), (3, "Third")]);
     assert_eq!(rendered.headings[0].line, 0);
+}
+
+// Run mu on a fixture with color off and return (exit code, stdout)
+fn run_toc(name: &str) -> (i32, String) {
+    let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(BIN)
+        .args(["--toc", "--color", "never", "-w", "40", &path])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run mu");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    )
+}
+
+#[test]
+fn toc_prints_the_markdown_outline() {
+    assert_eq!(
+        run_toc("kitchen-sink.md"),
+        (
+            0,
+            "mdread kitchen sink\n  Lists\n    Quotes and alerts\n      Code\n        Table\n          Misc\n"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn toc_works_for_html_and_is_empty_for_data() {
+    let (code, out) = run_toc("sample.html");
+    assert_eq!(code, 0);
+    assert!(
+        out.starts_with("Rendering HTML in the Terminal\n  Lists\n"),
+        "{out}"
+    );
+    assert_eq!(run_toc("sample.json"), (0, String::new()));
 }

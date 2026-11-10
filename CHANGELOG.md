@@ -4,6 +4,9 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Added
+- `--toc` prints a document's outline (its headings, indented by level) and exits. Works for files, stdin and URLs; data formats print nothing
+
 ## 0.4.0 - 2026-11-09
 
 ### Added
