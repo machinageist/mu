@@ -4,6 +4,9 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Fixed
+- Source files (`.c`, `.h`, `.cpp`, `.rs`, `.py`, `.js`, `.go`, `.sh` and about 80 other extensions) are shown verbatim instead of being read as Markdown, which joined lines and ate `*` and `_`. So are piped scripts that start with `#!`. `-f code` (or `-f text`) shows any input verbatim
+
 ## 0.6.0 - 2026-11-09
 
 ### Added

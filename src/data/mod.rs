@@ -4,6 +4,7 @@
 // Notes: Highlighters only classify text; this printer owns scrubbing, tabs, width and SGR,
 // so every data format keeps the same output invariants as documents
 
+pub mod code;
 pub mod json;
 pub mod toml;
 pub mod xml;

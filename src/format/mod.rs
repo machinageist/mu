@@ -31,10 +31,11 @@ pub enum Format {
     Csv,
     Tsv,
     Xml,
+    Code,
 }
 
 // Names accepted by --format, first one is canonical
-const NAMES: [(Format, &[&str]); 11] = [
+const NAMES: [(Format, &[&str]); 12] = [
     (Format::Markdown, &["markdown", "md"]),
     (Format::Html, &["html", "htm"]),
     (Format::Rst, &["rst", "restructuredtext"]),
@@ -46,10 +47,11 @@ const NAMES: [(Format, &[&str]); 11] = [
     (Format::Csv, &["csv"]),
     (Format::Tsv, &["tsv"]),
     (Format::Xml, &["xml", "plist"]),
+    (Format::Code, &["code", "text"]),
 ];
 
 // File extensions, matched case-insensitively
-const EXTENSIONS: [(Format, &[&str]); 11] = [
+const EXTENSIONS: [(Format, &[&str]); 12] = [
     (Format::Markdown, &["md", "markdown", "mdown", "mkd"]),
     (Format::Html, &["html", "htm", "xhtml"]),
     (Format::Rst, &["rst", "rest"]),
@@ -66,10 +68,104 @@ const EXTENSIONS: [(Format, &[&str]); 11] = [
             "xml", "plist", "xsd", "xsl", "xslt", "rss", "atom", "svg", "opml",
         ],
     ),
+    (
+        Format::Code,
+        &[
+            // C family
+            "c",
+            "h",
+            "cc",
+            "cpp",
+            "cxx",
+            "c++",
+            "hh",
+            "hpp",
+            "hxx",
+            "m",
+            "mm",
+            // Systems
+            "rs",
+            "go",
+            "zig",
+            "nim",
+            "asm",
+            "s",
+            // Scripting
+            "py",
+            "pyi",
+            "rb",
+            "pl",
+            "pm",
+            "php",
+            "lua",
+            "r",
+            "jl",
+            // Web
+            "js",
+            "mjs",
+            "cjs",
+            "jsx",
+            "ts",
+            "tsx",
+            "vue",
+            "svelte",
+            "css",
+            "scss",
+            "sass",
+            "less",
+            // JVM and .NET
+            "java",
+            "kt",
+            "kts",
+            "scala",
+            "groovy",
+            "gradle",
+            "cs",
+            "fs",
+            // Functional and other compiled
+            "hs",
+            "ml",
+            "mli",
+            "ex",
+            "exs",
+            "erl",
+            "clj",
+            "el",
+            "lisp",
+            "scm",
+            "dart",
+            "swift",
+            // Shell
+            "sh",
+            "bash",
+            "zsh",
+            "fish",
+            "ksh",
+            "ps1",
+            "bat",
+            "cmd",
+            // Other
+            "sql",
+            "diff",
+            "patch",
+            "vim",
+            "mk",
+            "cmake",
+            "proto",
+            "graphql",
+            "tf",
+            "hcl",
+            "nix",
+            "ini",
+            "cfg",
+            "conf",
+            "properties",
+        ],
+    ),
 ];
 
 // Media types from a Content-Type header, matched without parameters, case-insensitively
-const MEDIA_TYPES: [(Format, &[&str]); 11] = [
+const MEDIA_TYPES: [(Format, &[&str]); 12] = [
     (Format::Markdown, &["text/markdown", "text/x-markdown"]),
     (Format::Html, &["text/html", "application/xhtml+xml"]),
     (Format::Rst, &["text/x-rst", "text/prs.fallenstein.rst"]),
@@ -96,6 +192,31 @@ const MEDIA_TYPES: [(Format, &[&str]); 11] = [
     (Format::Csv, &["text/csv"]),
     (Format::Tsv, &["text/tab-separated-values"]),
     (Format::Xml, &["application/xml", "text/xml"]),
+    (
+        Format::Code,
+        &[
+            "text/x-c",
+            "text/x-csrc",
+            "text/x-chdr",
+            "text/x-c++src",
+            "text/x-c++hdr",
+            "text/x-python",
+            "text/x-rust",
+            "text/x-go",
+            "text/x-java",
+            "text/x-java-source",
+            "text/javascript",
+            "application/javascript",
+            "application/x-javascript",
+            "text/x-sh",
+            "application/x-sh",
+            "text/x-shellscript",
+            "text/x-diff",
+            "text/x-patch",
+            "text/css",
+            "application/sql",
+        ],
+    ),
 ];
 
 // Structured-syntax suffix for JSON media types such as application/problem+json
@@ -179,7 +300,9 @@ pub fn sniff(input: &str) -> Format {
     }
     let head = &input[..end];
     // Most specific signals first; YAML last because loose prose can look like it
-    if data::json::sniff(head) {
+    if data::code::sniff(head) {
+        Format::Code
+    } else if data::json::sniff(head) {
         Format::Json
     } else if html::sniff(head) {
         Format::Html
@@ -222,6 +345,7 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
         Format::Yaml => no_headings(data::print(&data::yaml::highlight(input), options)),
         Format::Toml => no_headings(data::print(&data::toml::highlight(input), options)),
         Format::Xml => no_headings(data::print(&data::xml::highlight(input), options)),
+        Format::Code => no_headings(data::print(&data::code::lines(input), options)),
         Format::Csv | Format::Tsv => render_table_events(
             csv::events(input, format),
             options,
@@ -244,6 +368,10 @@ mod tests {
         assert_eq!(Format::from_path("Cargo.toml"), Some(Format::Toml));
         assert_eq!(Format::from_path("notes"), None);
         assert_eq!(Format::from_path("x.txt"), None);
+        assert_eq!(Format::from_path("src/main.C"), Some(Format::Code));
+        assert_eq!(Format::from_path("lib.h"), Some(Format::Code));
+        assert_eq!(Format::from_path("build.sh"), Some(Format::Code));
+        assert_eq!(Format::from_name("text"), Some(Format::Code));
     }
 
     #[test]
@@ -271,6 +399,7 @@ mod tests {
             Format::from_media_type("text/markdown"),
             Some(Format::Markdown)
         );
+        assert_eq!(Format::from_media_type("text/x-csrc"), Some(Format::Code));
         assert_eq!(Format::from_media_type("text/plain"), None);
         assert_eq!(Format::from_media_type("application/octet-stream"), None);
     }
