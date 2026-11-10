@@ -4,6 +4,8 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-09
+
 ### Added
 - Pager: `h`/`l` and `←`/`→` scroll sideways by half a window when lines are wider than the screen, such as wide tables. The status bar shows `col N` while scrolled, and a search scrolls sideways to reach its match
 - XML (including plist, SVG source, RSS and Atom) is highlighted, and re-indented two spaces per level when tags balance and no element mixes text with child elements; anything else is shown as written. Recognised by `.xml`, `.plist`, `.svg`, `.rss`, `.atom` and similar, `application/xml`, `text/xml` and `+xml` media types, `-f xml`/`plist`, and an `<?xml` declaration or well-known root in piped input
