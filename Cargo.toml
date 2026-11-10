@@ -1,6 +1,6 @@
 [package]
 name = "mu"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "mu, the markup/markdown utility: a fast terminal presenter for Markdown, other markup and data formats"
 license = "MIT"
