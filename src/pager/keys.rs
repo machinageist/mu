@@ -30,6 +30,7 @@ pub(super) enum Action {
     NextMatch,
     PrevMatch,
     ClearSearch,
+    Outline,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +122,7 @@ pub(super) fn normal_action(key: Key) -> Option<Action> {
         Key::Char('?') => Some(Action::Search(Direction::Backward)),
         Key::Char('n') => Some(Action::NextMatch),
         Key::Char('N') => Some(Action::PrevMatch),
+        Key::Char('o') => Some(Action::Outline),
         Key::Esc => Some(Action::ClearSearch),
         Key::Nav(action) => Some(action),
         _ => None,
@@ -155,12 +157,13 @@ mod tests {
     fn search_keys_map_to_actions() {
         use Action::*;
         assert_eq!(
-            actions(b"/?nN"),
+            actions(b"/?nNo"),
             [
                 Search(Direction::Forward),
                 Search(Direction::Backward),
                 NextMatch,
-                PrevMatch
+                PrevMatch,
+                Outline
             ]
         );
     }

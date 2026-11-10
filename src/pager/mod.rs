@@ -6,6 +6,7 @@
 // own style, which is what lets any window of lines be drawn on its own
 
 mod keys;
+mod outline;
 mod search;
 
 use std::fs::{File, OpenOptions};
@@ -17,9 +18,12 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use mu::{Heading, Rendered, outline_entries};
+
 use crate::term::{self, Size};
 
 use keys::{Action, CTRL_C, CTRL_U, Key, normal_action, parse_keys};
+use outline::Outline;
 use search::{Direction, Hit, Search, highlight};
 
 const TTY_PATH: &str = "/dev/tty";
@@ -37,7 +41,11 @@ const CLEAR_TO_EOL: &str = "\x1b[K";
 const ROW_END: &str = "\r\n";
 const STATUS_STYLE: &str = "\x1b[0;7m";
 const SGR_RESET: &str = "\x1b[0m";
-const STATUS_HINT: &str = "/ search  q quit";
+const STATUS_HINT: &str = "/ search  o outline  q quit";
+const OUTLINE_TITLE: &str = "outline";
+const OUTLINE_HINT: &str = "Enter jump  o close";
+const NO_HEADINGS: &str = "no headings";
+const SELECTED_STYLE: &str = "\x1b[7m";
 const PROMPT_CURSOR: char = '█';
 const NOT_FOUND_PREFIX: &str = "not found: ";
 const WRAPPED_NOTE: &str = " wrapped";
@@ -150,7 +158,9 @@ impl Document {
 struct Pager {
     title: String,
     document: Document,
+    headings: Vec<Heading>,
     view: View,
+    outline: Option<Outline>,
     // The open search prompt: its direction and what has been typed
     prompt: Option<(Direction, String)>,
     search: Option<Search>,
@@ -162,8 +172,8 @@ struct Pager {
 
 impl Pager {
     // Start at the top of a document shown `rows` lines at a time
-    fn new(title: &str, text: String, rows: usize) -> Pager {
-        let document = Document::new(text);
+    fn new(title: &str, rendered: Rendered, rows: usize) -> Pager {
+        let document = Document::new(rendered.text);
         let view = View {
             top: 0,
             total: document.len(),
@@ -172,7 +182,9 @@ impl Pager {
         Pager {
             title: title.chars().filter(|ch| !ch.is_control()).collect(),
             document,
+            headings: rendered.headings,
             view,
+            outline: None,
             prompt: None,
             search: None,
             last_query: None,
@@ -200,8 +212,36 @@ impl Pager {
             }
             return false;
         }
+        if let Some(outline) = &mut self.outline {
+            match key {
+                Key::Enter => {
+                    let line = self
+                        .headings
+                        .get(outline.selected)
+                        .map(|heading| heading.line);
+                    self.outline = None;
+                    if let Some(line) = line {
+                        self.view.top = line.min(self.view.max_top());
+                    }
+                }
+                Key::Char('o' | 'q' | 'Q') | Key::Esc | Key::Ctrl(CTRL_C) => self.outline = None,
+                _ => {
+                    if let Some(action) = normal_action(key) {
+                        outline.apply(action, self.headings.len(), self.view.rows);
+                    }
+                }
+            }
+            return false;
+        }
         match normal_action(key) {
             Some(Action::Quit) => return true,
+            Some(Action::Outline) if self.headings.is_empty() => {
+                self.note = Some(NO_HEADINGS.to_owned());
+            }
+            Some(Action::Outline) => {
+                let starts: Vec<usize> = self.headings.iter().map(|heading| heading.line).collect();
+                self.outline = Some(Outline::open(&starts, self.view.top, self.view.rows));
+            }
             Some(Action::Search(direction)) => self.prompt = Some((direction, String::new())),
             Some(Action::NextMatch) => self.step(false),
             Some(Action::PrevMatch) => self.step(true),
@@ -261,9 +301,10 @@ impl Pager {
     }
 
     // Take a re-rendered document, or just a new height, keeping the place and the search
-    fn relayout(&mut self, text: Option<String>, rows: usize) {
-        if let Some(text) = text {
-            self.document = Document::new(text);
+    fn relayout(&mut self, rendered: Option<Rendered>, rows: usize) {
+        if let Some(rendered) = rendered {
+            self.document = Document::new(rendered.text);
+            self.headings = rendered.headings;
             if let Some(search) = &mut self.search {
                 let document = &self.document;
                 search.rescan((0..document.len()).filter_map(|index| document.line(index)));
@@ -273,6 +314,9 @@ impl Pager {
         let top = self.view.top;
         if let Some(search) = &mut self.search {
             search.first_from(top, Direction::Forward);
+        }
+        if let Some(outline) = &mut self.outline {
+            outline.follow(self.headings.len(), self.view.rows);
         }
     }
 
@@ -284,6 +328,11 @@ impl Pager {
             frame.push_str(CLEAR_SCREEN);
         }
         frame.push_str(CURSOR_HOME);
+        if let Some(outline) = &self.outline {
+            self.draw_outline(frame, outline, columns);
+            frame.push_str(SYNC_END);
+            return;
+        }
         for row in 0..self.view.rows {
             let index = self.view.top + row;
             if let Some(line) = self.document.line(index) {
@@ -297,6 +346,32 @@ impl Pager {
         }
         frame.push_str(&self.status_line(columns));
         frame.push_str(SYNC_END);
+    }
+
+    // Paint the heading list over the document, the selected entry in reverse video
+    fn draw_outline(&self, frame: &mut String, outline: &Outline, columns: usize) {
+        let entries = outline_entries(&self.headings, columns.saturating_sub(1).max(1));
+        for row in 0..self.view.rows {
+            let index = outline.top + row;
+            if let Some(entry) = entries.get(index) {
+                if index == outline.selected {
+                    frame.push_str(SELECTED_STYLE);
+                    frame.push_str(entry);
+                    frame.push_str(SGR_RESET);
+                } else {
+                    frame.push_str(entry);
+                }
+            }
+            frame.push_str(CLEAR_TO_EOL);
+            frame.push_str(ROW_END);
+        }
+        let place = format!("{}/{}", outline.selected + 1, self.headings.len());
+        let right = fit_left(
+            &format!("{place}  {OUTLINE_HINT} "),
+            columns.saturating_sub(2),
+        );
+        let left = fit_left(OUTLINE_TITLE, columns.saturating_sub(right.width() + 2));
+        frame.push_str(&bar(&left, &right, columns));
     }
 
     // Build the reverse-video status bar: the prompt, or a title or note with position and hints
@@ -379,12 +454,12 @@ impl Session {
     pub fn run(
         mut self,
         title: &str,
-        text: String,
-        relayout: &mut dyn FnMut(usize) -> Option<String>,
+        rendered: Rendered,
+        relayout: &mut dyn FnMut(usize) -> Option<Rendered>,
     ) -> io::Result<()> {
         let resize = ResizeSignal::install()?;
         let mut size = self.size();
-        let mut pager = Pager::new(title, text, body_rows(size));
+        let mut pager = Pager::new(title, rendered, body_rows(size));
         let mut frame = String::new();
         let mut keys = [0; KEY_BUFFER_SIZE];
         let mut clear = false;
@@ -675,7 +750,14 @@ mod tests {
                 }
             })
             .collect();
-        Pager::new("doc.md", text, rows)
+        Pager::new(
+            "doc.md",
+            Rendered {
+                text,
+                headings: Vec::new(),
+            },
+            rows,
+        )
     }
 
     // Feed raw key bytes, returning true if the pager asked to quit
@@ -782,7 +864,13 @@ mod tests {
     fn relayout_keeps_the_search() {
         let mut state = pager(100, &[10, 50, 90], 20);
         feed(&mut state, b"/match\r");
-        state.relayout(Some("match\nnone\nmatch\n".to_owned()), 20);
+        state.relayout(
+            Some(Rendered {
+                text: "match\nnone\nmatch\n".to_owned(),
+                headings: Vec::new(),
+            }),
+            20,
+        );
         let search = state.search.as_ref().expect("search kept");
         assert_eq!(search.count(), 2);
         assert_eq!(search.position(), Some(1));
@@ -810,6 +898,106 @@ mod tests {
         }
         feed(&mut state, b"\x1b\x1bg");
         assert!(status(&state, 120).contains("1-40/300 13%"));
+    }
+
+    // A pager over 100 lines with headings at 0, 30 and 60
+    fn outlined(rows: usize) -> Pager {
+        let text: String = (0..100).map(|line| format!("line {line}\n")).collect();
+        let headings = [(1, "Top", 0), (2, "Middle", 30), (2, "End", 60)]
+            .into_iter()
+            .map(|(level, text, line)| Heading {
+                level,
+                text: text.to_owned(),
+                line,
+            })
+            .collect();
+        Pager::new("doc.md", Rendered { text, headings }, rows)
+    }
+
+    #[test]
+    fn outline_opens_on_the_current_section_and_jumps() {
+        let mut state = outlined(10);
+        state.view.top = 40;
+        feed(&mut state, b"o");
+        assert_eq!(
+            state.outline.as_ref().map(|outline| outline.selected),
+            Some(1)
+        );
+        feed(&mut state, b"j\r");
+        assert!(state.outline.is_none());
+        assert_eq!(state.view.top, 60);
+        feed(&mut state, b"ok\x1b[A\r");
+        assert_eq!(state.view.top, 0);
+    }
+
+    #[test]
+    fn outline_closes_without_moving() {
+        let mut state = outlined(10);
+        state.view.top = 45;
+        for close in [&b"o"[..], b"q", b"\x1b", b"\x03"] {
+            feed(&mut state, b"oj");
+            assert!(!feed(&mut state, close), "{close:?} must not quit");
+            assert!(state.outline.is_none(), "{close:?}");
+            assert_eq!(state.view.top, 45);
+        }
+    }
+
+    #[test]
+    fn a_jump_near_the_end_is_clamped() {
+        let mut state = outlined(50);
+        feed(&mut state, b"oG\r");
+        assert_eq!(state.view.top, 50);
+    }
+
+    #[test]
+    fn no_headings_is_noted_until_the_next_key() {
+        let mut state = pager(10, &[], 5);
+        feed(&mut state, b"o");
+        assert!(state.outline.is_none());
+        assert!(status(&state, 40).starts_with(" no headings"));
+        feed(&mut state, b"j");
+        assert!(status(&state, 40).starts_with(" doc.md"));
+    }
+
+    #[test]
+    fn outline_frame_lists_headings_and_fills_the_status_bar() {
+        let mut state = outlined(10);
+        feed(&mut state, b"o");
+        for columns in [20, 60] {
+            let mut frame = String::new();
+            state.draw(&mut frame, columns, false);
+            assert!(frame.contains("\x1b[7mTop\x1b[0m"), "{frame:?}");
+            assert!(frame.contains("  Middle"));
+            let bar = frame.rsplit(ROW_END).next().unwrap_or_default();
+            let visible = bar
+                .trim_end_matches(SYNC_END)
+                .trim_start_matches(STATUS_STYLE)
+                .trim_end_matches(SGR_RESET);
+            assert_eq!(visible.width(), columns, "{visible:?}");
+        }
+    }
+
+    #[test]
+    fn relayout_replaces_the_headings() {
+        let mut state = outlined(10);
+        feed(&mut state, b"oG");
+        state.relayout(
+            Some(Rendered {
+                text: "a\nb\n".to_owned(),
+                headings: vec![Heading {
+                    level: 1,
+                    text: "Only".to_owned(),
+                    line: 1,
+                }],
+            }),
+            10,
+        );
+        assert_eq!(
+            state.outline.as_ref().map(|outline| outline.selected),
+            Some(0)
+        );
+        feed(&mut state, b"\r");
+        assert_eq!(state.view.top, 0);
     }
 
     #[test]

@@ -6,6 +6,7 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ### Added
 - Pager search: `/` and `?` search forward and back, `n` and `N` move between matches with wrap-around, matches are highlighted, and the status bar shows the match count. Lowercase queries ignore case. `Esc` clears the highlighting
+- Pager outline: `o` lists the document's headings, starting on the section being read; `Enter` jumps to one and `o`, `q` or `Esc` closes the list. Works for every document format
 - `--toc` prints a document's outline (its headings, indented by level) and exits. Works for files, stdin and URLs; data formats print nothing
 
 ## 0.4.0 - 2026-11-09

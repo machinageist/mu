@@ -266,10 +266,10 @@ fn show(args: &Args, source: &Source) -> ExitCode {
     }
 
     // Half-blocks first: they work in the pager, and decide whether paging is needed
-    let output = present_all(source, &options).text;
+    let rendered = present_all(source, &options);
 
     // Page when wanted and the terminal can be taken over, otherwise fall through to a plain write
-    if should_page(&args.paging, &output)
+    if should_page(&args.paging, &rendered.text)
         && let Ok(session) = pager::Session::open()
     {
         let mut width = options.width;
@@ -284,10 +284,9 @@ fn show(args: &Args, source: &Source) -> ExitCode {
                         ..options.clone()
                     },
                 )
-                .text
             })
         };
-        return match session.run(&source.title, output, &mut relayout) {
+        return match session.run(&source.title, rendered, &mut relayout) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{PROGRAM}: {error}");
@@ -303,7 +302,7 @@ fn show(args: &Args, source: &Source) -> ExitCode {
         native.images.protocol = protocol;
         present_all(source, &native).text
     } else {
-        output
+        rendered.text
     };
 
     write_out(&output)
