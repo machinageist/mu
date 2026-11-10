@@ -44,10 +44,26 @@ mu -H 'Accept: application/json' -X POST -d '{"q":1}' https://httpbin.org/post
 ## Format of a response {#url-format}
 
 1. `-f`, if given.
-2. The `Content-Type`. `text/plain` and `application/octet-stream` are skipped.
+2. The `Content-Type`, without its parameters and in any case. `text/plain` and `application/octet-stream` are skipped. The table below lists the types mu knows.
 3. The URL path's extension. The host is never used, so `example.md` as a domain isn't treated as Markdown.
 4. The content, via [sniffing](/wiki/formats#sniffing).
 5. Markdown.
+
+| Format | Media types |
+|---|---|
+| Markdown | `text/markdown` `text/x-markdown` |
+| HTML | `text/html` `application/xhtml+xml` |
+| reStructuredText | `text/x-rst` `text/prs.fallenstein.rst` |
+| Org | `text/org` `text/x-org` |
+| AsciiDoc | `text/asciidoc` `text/x-asciidoc` |
+| JSON | `application/json` `application/x-ndjson` `application/ld+json`, and any type ending in `+json` |
+| YAML | `application/yaml` `application/x-yaml` `text/yaml` `text/x-yaml` |
+| TOML | `application/toml` `text/x-toml` |
+| XML | `application/xml` `text/xml`, and any other type ending in `+xml`, such as `image/svg+xml` or `application/rss+xml` |
+| CSV | `text/csv` |
+| TSV | `text/tab-separated-values` |
+
+`--toc` works for URLs too: `mu --toc https://example.com/` prints the page's headings.
 
 ## Raw file rewrites {#raw-files}
 

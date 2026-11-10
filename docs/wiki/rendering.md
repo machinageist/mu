@@ -61,8 +61,10 @@ Real output of `mu -w 52` on a short document. Note the `┆` where the long cod
 - **Wrapping**: inline text is collected as styled word atoms, then wrapped to the width left after container gutters such as quote bars and list indents.
 - **Minimum content width**: very deep nesting stops shrinking content below 16 columns and overflows instead.
 - **Tables**: columns shrink widest-first and cells wrap. A table with too many columns to fit at 3 columns each overflows the width rather than becoming unreadable.
+- **CSV and TSV tables** use the same engine, but take the full terminal width and stop shrinking columns at 10. A wider table overflows, and the pager [scrolls it sideways](/wiki/pager#sideways). See [Tables](/wiki/formats#tables).
 - **Wide glyphs**: CJK and emoji are measured by display width (`unicode-width`), not byte or char count.
 - **Code blocks**: no syntax highlighting, on purpose, because it would cost startup time and binary size.
+- **Headings** are recorded with their level, text and first output line, for the pager's [outline](/wiki/pager#outline) and `--toc`.
 - **Links**: the URL is printed after the text. Links are not clickable, since mu doesn't emit OSC 8 hyperlinks.
 
 ## Theme {#theme}

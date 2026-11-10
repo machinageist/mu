@@ -45,6 +45,9 @@ The pager always uses half blocks. Native protocols are only used when writing s
 
 PNG, JPEG, GIF (first frame) and WebP are decoded by format, detected from their magic bytes. SVG is rendered with `resvg`. SVG text isn't rendered, and an SVG can't load external files or URLs.
 
+> [!NOTE]
+> This is about pictures inside a document. An `.svg` file given to mu directly is XML, so `mu logo.svg` shows its highlighted source. See [XML](/wiki/formats#xml).
+
 ## Sources {#sources}
 
 | Source | Loaded when |

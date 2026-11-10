@@ -2,7 +2,7 @@
 title: Read docs and data without leaving the terminal
 group: Guide
 order: 0
-summary: mu is the markup/markdown utility. It reads a file, stdin or a URL, works out the format, and prints styled, wrapped output for Markdown, HTML, reStructuredText, Org, AsciiDoc, JSON, YAML and TOML.
+summary: mu is the markup/markdown utility. It reads a file, stdin or a URL, works out the format, and prints styled, wrapped output for Markdown, HTML, reStructuredText, Org, AsciiDoc, JSON, YAML, TOML, XML, CSV and TSV.
 ---
 
 ```term notes.md — mu
@@ -15,8 +15,8 @@ frames straight in your terminal.
 <bl>Highlights</bl>
 <bl>──────────</bl>
 
-• Eight formats, one layout engine
-• Built-in pager, no <y>less</y> needed
+• Eleven formats, from Markdown to CSV
+• Built-in pager with search, no <y>less</y> needed
 ☑ Images drawn in the terminal
 
 <g>│</g> <g>Tip</g>
@@ -28,11 +28,13 @@ See <b>the docs</b> <d>(https://github.com/machinageist/mu)</d>.
 ## What it does {#features}
 
 - **Documents** in Markdown, HTML, reStructuredText, Org and AsciiDoc get headings, lists, quotes, tables, framed code blocks and links, all from one shared layout engine.
-- **Data** in JSON, YAML and TOML gets token coloring. Valid JSON is re-indented as well.
+- **Data** in JSON, YAML, TOML and XML gets token coloring. Valid JSON is re-indented as well, and so is XML whose structure allows it, including plists, SVG source and RSS or Atom feeds.
+- **Tables** in CSV and TSV are drawn with box borders, a header row and right-aligned numbers. A CSV's delimiter is detected.
 - **URLs** are fetched with the system `curl` and presented like files. GitHub, GitLab and Gist page URLs become their raw files.
 - **Images** standing alone in a document are drawn in the terminal with an exact aspect ratio.
-- **A pager is built in.** Documents taller than the screen open in it automatically.
-- **It's small.** A single ~2.0 MB binary with no config file. A typical README renders in about 2 ms over process start.
+- **A pager is built in.** Documents taller than the screen open in it automatically. It searches with `/` and `?`, lists headings with `o`, and scrolls wide tables sideways with `h` and `l`.
+- **Outlines.** `mu --toc FILE` prints a document's headings, indented by level.
+- **It's small.** A single ~2.2 MB binary with no config file. A typical README renders in about 2 ms over process start.
 - **Untrusted input is safe to view.** Control characters from the document never reach your terminal.
 
 ## Install {#install}
@@ -55,6 +57,9 @@ mu https://github.com/machinageist/mu/blob/main/README.md   # the raw file, not 
 mu -I https://example.com/                 # response headers as a table
 curl -s https://example.com/doc.md | mu    # pipes still work
 mu Cargo.toml
+mu data.csv                                # a box-drawn table
+mu Info.plist                              # XML, re-indented
+mu --toc README.md                         # just the headings
 mu -f rst < docs/index.txt
 mu -w 72 notes.org
 mu --images fetch page.html                # also download remote images
