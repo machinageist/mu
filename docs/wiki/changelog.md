@@ -2,16 +2,18 @@
 title: Changelog
 group: Project
 order: 2
-summary: Every release from 0.1.0 to 0.7.0, and what's unreleased
+summary: Every release from 0.1.0 to 0.8.0, and what's unreleased
 ---
 
 Every notable change, following [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Mirrors `CHANGELOG.md`.
 
 ## Unreleased {#unreleased}
 
-Changes merged since 0.7.0, not yet in a release.
+Changes merged since 0.8.0, not yet in a release.
 
-### Added {#unreleased-added}
+## 0.8.0 · 2026-11-10 {#v0-8-0}
+
+### Added {#v0-8-0-added}
 
 - Syntax highlighting for source files and for fenced code blocks in every document format, including Jupyter code cells. Built-in lexers cover every language mu shows as source code, about 50 in all: the C family, Rust, Go, Python, Ruby, JavaScript and TypeScript, shells, SQL, the JVM and functional languages, config files and diffs. A source file's language comes from its extension or its `#!` line, and a code block's from its info string. Unknown languages stay plain, and output without color is unchanged
 - EPUB books (`.epub`) are read as one document: the title and authors, then every chapter in reading order through the HTML presenter, with chapter headings in the outline. Pictures in the book are drawn, and links inside the book show as plain text. The zip is read in-process with size limits; Zip64 and encrypted books are refused. Recognised by `application/epub+zip`, `-f epub`, and the zip's `mimetype` entry in piped input
