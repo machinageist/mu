@@ -55,6 +55,8 @@ URL options (curl-like, only valid with a URL):
 Pager keys:
   j k  Down Up  Enter   scroll a line        space b  PgDn PgUp   scroll a page
   d u                   scroll half a page   g G  Home End        jump to top or bottom
+  / ?                   search forward, back n N                  next, previous match
+  o                     outline of headings  Esc                  clear search highlight
   q  Ctrl-C             quit";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

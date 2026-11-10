@@ -36,6 +36,7 @@ Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL.
   -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml
       --images <MODE>  auto, fetch or never (default: auto; fetch also downloads http(s) images)
       --base <DIR|URL> Resolve relative image paths here (default: the file's folder)
+      --toc            Print the document's outline (its headings) and exit
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
@@ -85,9 +86,17 @@ Built in, no `less` needed. It takes over the screen (alternate screen, so your 
 | `d` `Ctrl-D` / `u` `Ctrl-U` | Scroll half a page down / up |
 | `g` `Home` `<` / `G` `End` `>` | Jump to top / bottom |
 | Mouse wheel | Scroll (sent as arrow keys, so text selection still works) |
+| `/` / `?` | Search forward / backward. Type the text, `Enter` to search, `Esc` to cancel. An empty search repeats the last one |
+| `n` / `N` | Next / previous match, wrapping round the ends |
+| `Esc` | Clear search highlighting |
+| `o` | Outline: the document's headings. `j` `k` and the scroll keys move, `Enter` jumps there, `o` `q` `Esc` close |
 | `q` `Ctrl-C` | Quit |
 
-The bottom row shows the file name, the visible line range, how far through you are, and a quit hint. Resizing the window re-renders the document at the new width and keeps your place proportionally; with `-w` the layout stays fixed and only the window changes. Lines wider than the window are clipped rather than wrapped.
+**Search** matches the text as it appears on screen, with styling removed. It is a literal match, not a regular expression, and a lowercase query ignores case while any capital letter makes it case-sensitive. Every visible match is shown in reverse video, and the current one is also bold. The status bar shows the query, the match number and count (`3/17`), and `wrapped` when a jump went round the end. A match never spans two lines.
+
+**Outline** works for every document format, and opens on the heading of the section you are reading. `mu --toc FILE` prints the same outline without paging.
+
+The bottom row shows the file name, the visible line range, how far through you are, and the key hints. Resizing the window re-renders the document at the new width and keeps your place proportionally; with `-w` the layout stays fixed and only the window changes. Lines wider than the window are clipped rather than wrapped.
 
 ## Formats
 
@@ -199,7 +208,6 @@ Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and c
 - Non-Markdown parsers cover the subset real READMEs and pages use, not the full specs: no table cell spans (HTML, RST, AsciiDoc), no RST line blocks or letter/roman enumerators, no AsciiDoc footnotes, one header row per Org table.
 - YAML and TOML are colored, never reformatted. JSON nested deeper than 256 levels is colored as written rather than re-indented.
 - Content detection reads the first 8 KB. Short or unusual inputs may be shown as Markdown; use `-f`.
-- The pager has no search (`/`) yet.
 - Images: no EXIF orientation for JPEGs, no animated GIFs, no SVG text, and no images inline within a line of text.
 - URLs: no caching between runs, and charsets other than UTF-8 are shown with replacement characters. A repository's front page is fetched as HTML; point at the README's blob URL instead.
 - Links are not clickable (no OSC 8 hyperlinks); the URL is printed instead.

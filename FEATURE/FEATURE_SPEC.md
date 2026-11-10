@@ -48,7 +48,19 @@ Document formats share one layout engine. Each one gets the same headings, lists
 - Malformed input never panics or errors. It renders on a best-effort basis
 - A closed pipe is a success. Exit codes: 0 ok, 1 read/write error, fetch failure or HTTP status of 400 or more, 2 usage error
 
-## Images
+## Pager
+
+- Pages only when stdout is a terminal. It reads keys from `/dev/tty` and waits on it with `select()`, because macOS `poll()` rejects `/dev/tty`
+- A resize re-renders at the new width when the width is automatic, keeping the reader's place proportionally. Any search and the outline follow the new layout
+- **Search** (`/` `?` `n` `N` `Esc`):
+  - Literal substrings with smart case, matched against each line with SGR removed. A match never spans two lines
+  - `n` and `N` wrap round the ends. A match already on screen does not scroll the view
+  - Highlighting only inserts SGR. With styling removed, a highlighted line equals the original, and it still resets before its newline
+- **Outline** (`o`):
+  - The renderer records each heading's level, plain text and first output line
+  - The list opens on the section holding the top line, and `Enter` puts the heading's line at the top, clamped at the end of the document
+  - `--toc` prints the same outline, indented two spaces per level below the shallowest. Data formats have no headings
+
 
 - An image alone in its paragraph or block is drawn. Inline images, failures, color off and `--images never` all show `[image: alt]`
 - The aspect ratio is exact to within half a cell, using the terminal's reported cell pixels or an assumed 1:2 cell. Images are never enlarged, never wider than the content column and never taller than the screen minus 2 rows

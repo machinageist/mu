@@ -48,5 +48,12 @@ Drive `mu` in a pseudo-terminal by hand:
 
 Record the results here.
 
+**Result, 2026-11-09:** scripted in a real pseudo-terminal, with resizes sent through the kernel's own SIGWINCH.
+- **Search:** `/` and `?` work, `n` and `N` wrap, not-found shows and clears on the next key, `Esc` clears, and prompt editing works.
+- **Resize during a search:** the page re-lays out (81 lines become 83 at 60 columns) and the search is kept.
+- **Outline:** it opens on the section being read, and a resize with it open redraws at the new width. `Enter` jumps, clamped at the end, and `q` exits 0.
+- **Bug found:** a resize waited for the next key on macOS. `poll()` returns POLLNVAL for `/dev/tty`, so the loop sat in a blocking read. The bug was already in 0.4.0. It is fixed by waiting with `select()`.
+- **Regression test:** `tests/pager_pty.rs` now drives the real pager in a pty as part of the test suite, and its resize test fails on the old code.
+
 ## 7. Docs and release
 README (pager table, Usage, `--toc`), `FEATURE_SPEC.md` (a Pager section), and `--help`. CHANGELOG `Added` entries. Release 0.5.0 per `CONTRIBUTING.md`, push, and create the GitHub release if that's allowed.
