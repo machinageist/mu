@@ -5,8 +5,7 @@
 // resize re-renders the document instead of reflowing old lines. Every rendered line closes its
 // own style, which is what lets any window of lines be drawn on its own
 
-// Wired into the pager loop in the next task
-#[allow(dead_code)]
+mod keys;
 mod search;
 
 use std::fs::{File, OpenOptions};
@@ -19,6 +18,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::term::{self, Size};
+
+use keys::{Action, CTRL_C, CTRL_U, Key, normal_action, parse_keys};
+use search::{Direction, Hit, Search, highlight};
 
 const TTY_PATH: &str = "/dev/tty";
 
@@ -35,7 +37,10 @@ const CLEAR_TO_EOL: &str = "\x1b[K";
 const ROW_END: &str = "\r\n";
 const STATUS_STYLE: &str = "\x1b[0;7m";
 const SGR_RESET: &str = "\x1b[0m";
-const STATUS_HINT: &str = "q quit";
+const STATUS_HINT: &str = "/ search  q quit";
+const PROMPT_CURSOR: char = '█';
+const NOT_FOUND_PREFIX: &str = "not found: ";
+const WRAPPED_NOTE: &str = " wrapped";
 const ELLIPSIS: char = '…';
 
 // Used when the terminal will not report its size
@@ -45,13 +50,7 @@ const FALLBACK_SIZE: Size = Size {
     pixels: None,
 };
 
-// Key bytes
-const ESC: u8 = 0x1b;
-const CTRL_B: u8 = 0x02;
-const CTRL_C: u8 = 0x03;
-const CTRL_D: u8 = 0x04;
-const CTRL_F: u8 = 0x06;
-const CTRL_U: u8 = 0x15;
+// Bytes read from the terminal at once
 const KEY_BUFFER_SIZE: usize = 64;
 
 // Terminal settings to put back if a panic ends the process mid-session
@@ -59,19 +58,6 @@ static ACTIVE_MODE: Mutex<Option<(RawFd, libc::termios)>> = Mutex::new(None);
 
 // Write end of the resize pipe, read by the signal handler
 static RESIZE_WAKE_FD: AtomicI32 = AtomicI32::new(-1);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
-    Quit,
-    LineDown,
-    LineUp,
-    PageDown,
-    PageUp,
-    HalfDown,
-    HalfUp,
-    Top,
-    Bottom,
-}
 
 // Scroll position over a document of `total` lines shown `rows` at a time
 #[derive(Debug, PartialEq, Eq)]
@@ -99,9 +85,16 @@ impl View {
             Action::HalfUp => self.top.saturating_sub(half),
             Action::Top => 0,
             Action::Bottom => self.max_top(),
-            Action::Quit => self.top,
+            _ => self.top,
         };
         self.top = target.min(self.max_top());
+    }
+
+    // Bring a line into view, putting it at the top unless it is already on screen
+    fn show(&mut self, line: usize) {
+        if line < self.top || line >= self.top + self.rows {
+            self.top = line.min(self.max_top());
+        }
     }
 
     // Adopt a new document length or window height, keeping the reader's place proportionally
@@ -153,6 +146,208 @@ impl Document {
     }
 }
 
+// Everything the pager shows and remembers between keys, apart from the terminal itself
+struct Pager {
+    title: String,
+    document: Document,
+    view: View,
+    // The open search prompt: its direction and what has been typed
+    prompt: Option<(Direction, String)>,
+    search: Option<Search>,
+    last_query: Option<String>,
+    // One-key messages: a note replacing the title, and whether the last jump wrapped
+    note: Option<String>,
+    wrapped: bool,
+}
+
+impl Pager {
+    // Start at the top of a document shown `rows` lines at a time
+    fn new(title: &str, text: String, rows: usize) -> Pager {
+        let document = Document::new(text);
+        let view = View {
+            top: 0,
+            total: document.len(),
+            rows,
+        };
+        Pager {
+            title: title.chars().filter(|ch| !ch.is_control()).collect(),
+            document,
+            view,
+            prompt: None,
+            search: None,
+            last_query: None,
+            note: None,
+            wrapped: false,
+        }
+    }
+
+    // Act on one key; true means quit
+    fn handle(&mut self, key: Key) -> bool {
+        self.note = None;
+        self.wrapped = false;
+        if let Some((_, typed)) = &mut self.prompt {
+            match key {
+                Key::Char(ch) => typed.push(ch),
+                Key::Backspace if typed.pop().is_none() => self.prompt = None,
+                Key::Ctrl(CTRL_U) => typed.clear(),
+                Key::Enter => {
+                    if let Some((direction, typed)) = self.prompt.take() {
+                        self.run_search(direction, typed);
+                    }
+                }
+                Key::Esc | Key::Ctrl(CTRL_C) => self.prompt = None,
+                _ => {}
+            }
+            return false;
+        }
+        match normal_action(key) {
+            Some(Action::Quit) => return true,
+            Some(Action::Search(direction)) => self.prompt = Some((direction, String::new())),
+            Some(Action::NextMatch) => self.step(false),
+            Some(Action::PrevMatch) => self.step(true),
+            Some(Action::ClearSearch) => self.search = None,
+            Some(action) => self.view.apply(action),
+            None => {}
+        }
+        false
+    }
+
+    // Search for a query, or repeat the last one when the prompt was left empty
+    fn run_search(&mut self, direction: Direction, typed: String) {
+        let query = if typed.is_empty() {
+            match &self.last_query {
+                Some(last) => last.clone(),
+                None => return,
+            }
+        } else {
+            typed
+        };
+        let document = &self.document;
+        let lines = (0..document.len()).filter_map(|index| document.line(index));
+        let mut search = Search::new(&query, direction, lines);
+        self.last_query = Some(query);
+        match search.first_from(self.view.top, direction) {
+            Some(hit) => {
+                self.search = Some(search);
+                self.jump(hit);
+            }
+            None => {
+                self.note = Some(format!("{NOT_FOUND_PREFIX}{}", search.query));
+                self.search = None;
+            }
+        }
+    }
+
+    // Move to the next match, or the previous one when `reverse`, relative to the typed direction
+    fn step(&mut self, reverse: bool) {
+        let top = self.view.top;
+        let hit = self.search.as_mut().and_then(|search| {
+            let direction = if reverse {
+                search.direction.reverse()
+            } else {
+                search.direction
+            };
+            search.step(direction, top)
+        });
+        if let Some(hit) = hit {
+            self.jump(hit);
+        }
+    }
+
+    // Scroll to a match and note when the search went round the end
+    fn jump(&mut self, hit: Hit) {
+        self.wrapped = hit.wrapped;
+        self.view.show(hit.line);
+    }
+
+    // Take a re-rendered document, or just a new height, keeping the place and the search
+    fn relayout(&mut self, text: Option<String>, rows: usize) {
+        if let Some(text) = text {
+            self.document = Document::new(text);
+            if let Some(search) = &mut self.search {
+                let document = &self.document;
+                search.rescan((0..document.len()).filter_map(|index| document.line(index)));
+            }
+        }
+        self.view.resize(self.document.len(), rows);
+        let top = self.view.top;
+        if let Some(search) = &mut self.search {
+            search.first_from(top, Direction::Forward);
+        }
+    }
+
+    // Paint one full frame: the visible lines with any matches, then the status bar on the last row
+    fn draw(&self, frame: &mut String, columns: usize, clear: bool) {
+        frame.clear();
+        frame.push_str(SYNC_BEGIN);
+        if clear {
+            frame.push_str(CLEAR_SCREEN);
+        }
+        frame.push_str(CURSOR_HOME);
+        for row in 0..self.view.rows {
+            let index = self.view.top + row;
+            if let Some(line) = self.document.line(index) {
+                match &self.search {
+                    Some(search) => frame.push_str(&highlight(line, &search.on_line(index))),
+                    None => frame.push_str(line),
+                }
+            }
+            frame.push_str(CLEAR_TO_EOL);
+            frame.push_str(ROW_END);
+        }
+        frame.push_str(&self.status_line(columns));
+        frame.push_str(SYNC_END);
+    }
+
+    // Build the reverse-video status bar: the prompt, or a title or note with position and hints
+    fn status_line(&self, columns: usize) -> String {
+        if let Some((direction, typed)) = &self.prompt {
+            let prompt = format!("{}{typed}{PROMPT_CURSOR}", direction_mark(*direction));
+            let prompt = fit_left(&prompt, columns.saturating_sub(2));
+            return bar(&prompt, "", columns);
+        }
+        let view = &self.view;
+        let first = (view.top + 1).min(view.total);
+        let last = (view.top + view.rows).min(view.total);
+        let percent = (last * 100).checked_div(view.total).unwrap_or(100);
+        let found = self.search.as_ref().map_or(String::new(), |search| {
+            let position = search
+                .position()
+                .map_or("-".to_owned(), |position| position.to_string());
+            let wrapped = if self.wrapped { WRAPPED_NOTE } else { "" };
+            format!(
+                "{}{} {position}/{}{wrapped}  ",
+                direction_mark(search.direction),
+                search.query,
+                search.count()
+            )
+        });
+        let place = format!("{first}-{last}/{} {percent}%", view.total);
+        let mut right = format!("{found}{place}  {STATUS_HINT} ");
+        if right.width() + 2 > columns {
+            right = format!("{found}{place} ");
+        }
+        let right = fit_left(&right, columns.saturating_sub(2));
+        let left = self.note.as_deref().unwrap_or(&self.title);
+        let left = fit_left(left, columns.saturating_sub(right.width() + 2));
+        bar(&left, &right, columns)
+    }
+}
+
+// The key that starts a search in this direction
+fn direction_mark(direction: Direction) -> char {
+    match direction {
+        Direction::Forward => '/',
+        Direction::Backward => '?',
+    }
+}
+
+// Lay out a reverse-video bar exactly `columns` wide, left text after one space, right text flush
+fn bar(left: &str, right: &str, columns: usize) -> String {
+    let gap = columns.saturating_sub(1 + left.width() + right.width());
+    format!("{STATUS_STYLE} {left}{}{right}{SGR_RESET}", " ".repeat(gap))
+}
+
 // Raw-mode, alternate-screen session on the controlling terminal, undone on drop
 pub struct Session {
     tty: File,
@@ -188,19 +383,13 @@ impl Session {
         relayout: &mut dyn FnMut(usize) -> Option<String>,
     ) -> io::Result<()> {
         let resize = ResizeSignal::install()?;
-        let title: String = title.chars().filter(|ch| !ch.is_control()).collect();
-        let mut document = Document::new(text);
         let mut size = self.size();
-        let mut view = View {
-            top: 0,
-            total: document.len(),
-            rows: body_rows(size),
-        };
+        let mut pager = Pager::new(title, text, body_rows(size));
         let mut frame = String::new();
         let mut keys = [0; KEY_BUFFER_SIZE];
         let mut clear = false;
         loop {
-            draw_frame(&mut frame, &document, &view, &title, size.columns, clear);
+            pager.draw(&mut frame, size.columns, clear);
             self.tty.write_all(frame.as_bytes())?;
             clear = false;
 
@@ -209,10 +398,7 @@ impl Session {
             if resized {
                 resize.drain();
                 size = self.size();
-                if let Some(text) = relayout(size.columns) {
-                    document = Document::new(text);
-                }
-                view.resize(document.len(), body_rows(size));
+                pager.relayout(relayout(size.columns), body_rows(size));
                 clear = true;
             }
             if input_ready {
@@ -229,11 +415,10 @@ impl Session {
                     }
                     Err(error) => return Err(error),
                 };
-                for action in parse_keys(&keys[..count]) {
-                    if action == Action::Quit {
+                for key in parse_keys(&keys[..count]) {
+                    if pager.handle(key) {
                         return Ok(());
                     }
-                    view.apply(action);
                 }
             }
         }
@@ -407,46 +592,6 @@ fn body_rows(size: Size) -> usize {
     size.rows.saturating_sub(1).max(1)
 }
 
-// Paint one full frame: the visible lines, then the status bar on the last row
-fn draw_frame(
-    frame: &mut String,
-    document: &Document,
-    view: &View,
-    title: &str,
-    columns: usize,
-    clear: bool,
-) {
-    frame.clear();
-    frame.push_str(SYNC_BEGIN);
-    if clear {
-        frame.push_str(CLEAR_SCREEN);
-    }
-    frame.push_str(CURSOR_HOME);
-    for row in 0..view.rows {
-        if let Some(line) = document.line(view.top + row) {
-            frame.push_str(line);
-        }
-        frame.push_str(CLEAR_TO_EOL);
-        frame.push_str(ROW_END);
-    }
-    frame.push_str(&status_line(title, view, columns));
-    frame.push_str(SYNC_END);
-}
-
-// Build the reverse-video status bar: title on the left, position and hint on the right
-fn status_line(title: &str, view: &View, columns: usize) -> String {
-    let first = (view.top + 1).min(view.total);
-    let last = (view.top + view.rows).min(view.total);
-    let percent = (last * 100).checked_div(view.total).unwrap_or(100);
-    let right = format!("{first}-{last}/{} {percent}%  {STATUS_HINT} ", view.total);
-    let title = fit_left(title, columns.saturating_sub(right.width() + 2));
-    let gap = columns.saturating_sub(1 + title.width() + right.width());
-    format!(
-        "{STATUS_STYLE} {title}{}{right}{SGR_RESET}",
-        " ".repeat(gap)
-    )
-}
-
 // Trim text from the left to fit `room` columns, marking the cut with an ellipsis
 fn fit_left(text: &str, room: usize) -> String {
     if text.width() <= room {
@@ -465,60 +610,6 @@ fn fit_left(text: &str, room: usize) -> String {
     format!("{ELLIPSIS}{}", &text[start..])
 }
 
-// Translate raw key bytes into pager actions, ignoring keys with no binding
-fn parse_keys(bytes: &[u8]) -> Vec<Action> {
-    let mut actions = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        let introducer = bytes.get(index + 1).copied();
-        if bytes[index] == ESC && matches!(introducer, Some(b'[' | b'O')) {
-            let params_start = index + 2;
-            let final_offset = bytes[params_start..]
-                .iter()
-                .position(|byte| (0x40..=0x7E).contains(byte));
-            let Some(offset) = final_offset else {
-                break;
-            };
-            let end = params_start + offset;
-            actions.extend(escape_action(&bytes[params_start..end], bytes[end]));
-            index = end + 1;
-        } else {
-            actions.extend(key_action(bytes[index]));
-            index += 1;
-        }
-    }
-    actions
-}
-
-// Map a CSI or SS3 key sequence to an action
-fn escape_action(params: &[u8], final_byte: u8) -> Option<Action> {
-    match (final_byte, params) {
-        (b'A', _) => Some(Action::LineUp),
-        (b'B', _) => Some(Action::LineDown),
-        (b'H', _) | (b'~', b"1" | b"7") => Some(Action::Top),
-        (b'F', _) | (b'~', b"4" | b"8") => Some(Action::Bottom),
-        (b'~', b"5") => Some(Action::PageUp),
-        (b'~', b"6") => Some(Action::PageDown),
-        _ => None,
-    }
-}
-
-// Map a single key byte to an action
-fn key_action(byte: u8) -> Option<Action> {
-    match byte {
-        b'q' | b'Q' | CTRL_C => Some(Action::Quit),
-        b'j' | b'e' | b'\r' | b'\n' => Some(Action::LineDown),
-        b'k' | b'y' => Some(Action::LineUp),
-        b' ' | b'f' | CTRL_F => Some(Action::PageDown),
-        b'b' | CTRL_B => Some(Action::PageUp),
-        b'd' | CTRL_D => Some(Action::HalfDown),
-        b'u' | CTRL_U => Some(Action::HalfUp),
-        b'g' | b'<' => Some(Action::Top),
-        b'G' | b'>' => Some(Action::Bottom),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,43 +617,6 @@ mod tests {
     // Build a view for scroll tests
     fn view(top: usize, total: usize, rows: usize) -> View {
         View { top, total, rows }
-    }
-
-    #[test]
-    fn letter_and_control_keys_map_to_actions() {
-        let actions = parse_keys(b"jk bdugGq\x03\x06\x02");
-        use Action::*;
-        assert_eq!(
-            actions,
-            [
-                LineDown, LineUp, PageDown, PageUp, HalfDown, HalfUp, Top, Bottom, Quit, Quit,
-                PageDown, PageUp
-            ]
-        );
-    }
-
-    #[test]
-    fn escape_sequences_map_to_actions() {
-        let actions = parse_keys(b"\x1b[A\x1b[B\x1b[5~\x1b[6~\x1b[H\x1b[F\x1b[1~\x1b[4~\x1bOA");
-        use Action::*;
-        assert_eq!(
-            actions,
-            [
-                LineUp, LineDown, PageUp, PageDown, Top, Bottom, Top, Bottom, LineUp
-            ]
-        );
-    }
-
-    #[test]
-    fn wheel_burst_yields_one_action_per_arrow() {
-        assert_eq!(parse_keys(b"\x1b[B\x1b[B\x1b[B"), [Action::LineDown; 3]);
-    }
-
-    #[test]
-    fn unknown_and_incomplete_keys_are_ignored() {
-        assert_eq!(parse_keys(b"x\x1b[2~z"), []);
-        assert_eq!(parse_keys(b"j\x1b["), [Action::LineDown]);
-        assert_eq!(parse_keys(b"\x1b"), []);
     }
 
     #[test]
@@ -610,17 +664,152 @@ mod tests {
         assert_eq!(Document::new(String::new()).len(), 0);
     }
 
+    // A pager over `total` numbered lines with "match" on the given lines
+    fn pager(total: usize, matching: &[usize], rows: usize) -> Pager {
+        let text: String = (0..total)
+            .map(|line| {
+                if matching.contains(&line) {
+                    format!("line {line} has a \x1b[1mMatch\x1b[0m\n")
+                } else {
+                    format!("line {line}\n")
+                }
+            })
+            .collect();
+        Pager::new("doc.md", text, rows)
+    }
+
+    // Feed raw key bytes, returning true if the pager asked to quit
+    fn feed(pager: &mut Pager, bytes: &[u8]) -> bool {
+        parse_keys(bytes).into_iter().any(|key| pager.handle(key))
+    }
+
+    // The status bar without its styling
+    fn status(pager: &Pager, columns: usize) -> String {
+        pager
+            .status_line(columns)
+            .trim_start_matches(STATUS_STYLE)
+            .trim_end_matches(SGR_RESET)
+            .to_owned()
+    }
+
     #[test]
-    fn status_line_fills_exactly_the_width() {
-        let state = view(0, 300, 40);
-        for columns in [30, 60, 120] {
-            let line = status_line("docs/README.md", &state, columns);
-            let visible = line
-                .trim_start_matches(STATUS_STYLE)
-                .trim_end_matches(SGR_RESET);
-            assert_eq!(visible.width(), columns, "{visible:?}");
-            assert!(visible.contains("1-40/300 13%"), "{visible:?}");
+    fn search_jumps_counts_and_wraps() {
+        let mut state = pager(100, &[10, 50, 90], 5);
+        feed(&mut state, b"/match\r");
+        assert_eq!(state.view.top, 10);
+        assert!(
+            status(&state, 80).contains("/match 1/3"),
+            "{}",
+            status(&state, 80)
+        );
+        feed(&mut state, b"n");
+        assert_eq!(state.view.top, 50);
+        feed(&mut state, b"n");
+        assert_eq!(state.view.top, 90);
+        feed(&mut state, b"n");
+        assert_eq!(state.view.top, 10);
+        assert!(status(&state, 80).contains("/match 1/3 wrapped"));
+        feed(&mut state, b"j");
+        assert!(!status(&state, 80).contains("wrapped"));
+    }
+
+    #[test]
+    fn backward_search_and_reversed_steps() {
+        let mut state = pager(100, &[10, 50, 90], 20);
+        state.view.top = 40;
+        feed(&mut state, b"?match\r");
+        assert_eq!(state.view.top, 10);
+        assert!(status(&state, 80).contains("?match 1/3"));
+        feed(&mut state, b"N");
+        assert_eq!(state.view.top, 50);
+        feed(&mut state, b"n");
+        assert_eq!(state.view.top, 10);
+    }
+
+    #[test]
+    fn a_match_already_on_screen_does_not_scroll() {
+        let mut state = pager(100, &[5, 50], 20);
+        feed(&mut state, b"/match\r");
+        assert_eq!(state.view.top, 0);
+    }
+
+    #[test]
+    fn empty_enter_repeats_the_last_search_in_the_new_direction() {
+        let mut state = pager(100, &[10, 50, 90], 20);
+        feed(&mut state, b"/match\r");
+        feed(&mut state, b"\x1b");
+        assert!(state.search.is_none());
+        state.view.top = 60;
+        feed(&mut state, b"?\r");
+        assert_eq!(state.view.top, 50);
+        assert_eq!(state.last_query.as_deref(), Some("match"));
+    }
+
+    #[test]
+    fn not_found_keeps_the_view_until_the_next_key() {
+        let mut state = pager(100, &[10], 20);
+        state.view.top = 30;
+        feed(&mut state, b"/zeta\r");
+        assert_eq!(state.view.top, 30);
+        assert!(state.search.is_none());
+        assert!(status(&state, 80).starts_with(" not found: zeta"));
+        feed(&mut state, b"k");
+        assert!(status(&state, 80).starts_with(" doc.md"));
+    }
+
+    #[test]
+    fn prompt_editing_keys() {
+        let mut state = pager(10, &[], 5);
+        feed(&mut state, "/ab\x7fcé".as_bytes());
+        assert_eq!(state.prompt, Some((Direction::Forward, "acé".to_owned())));
+        assert!(status(&state, 40).starts_with(" /acé█"));
+        feed(&mut state, b"\x15x");
+        assert_eq!(state.prompt, Some((Direction::Forward, "x".to_owned())));
+        feed(&mut state, b"\x1b");
+        assert_eq!(state.prompt, None);
+        feed(&mut state, b"?\x7f");
+        assert_eq!(state.prompt, None);
+        feed(&mut state, b"/q\x03");
+        assert_eq!(state.prompt, None);
+        assert!(
+            !feed(&mut state, b"/q"),
+            "q types into the prompt rather than quitting"
+        );
+        assert!(feed(&mut state, b"\x1bq"));
+    }
+
+    #[test]
+    fn relayout_keeps_the_search() {
+        let mut state = pager(100, &[10, 50, 90], 20);
+        feed(&mut state, b"/match\r");
+        state.relayout(Some("match\nnone\nmatch\n".to_owned()), 20);
+        let search = state.search.as_ref().expect("search kept");
+        assert_eq!(search.count(), 2);
+        assert_eq!(search.position(), Some(1));
+    }
+
+    #[test]
+    fn highlighted_frame_marks_visible_matches() {
+        let mut state = pager(30, &[3], 10);
+        feed(&mut state, b"/match\r");
+        let mut frame = String::new();
+        state.draw(&mut frame, 40, false);
+        assert!(frame.contains("\x1b[1;7mMatch"), "{frame:?}");
+    }
+
+    #[test]
+    fn status_line_fills_exactly_the_width_in_every_mode() {
+        let mut state = pager(300, &[100], 40);
+        for setup in [&b""[..], b"/match\r", b"/zeta\r", b"/typing"] {
+            feed(&mut state, b"\x1b\x1b");
+            feed(&mut state, setup);
+            for columns in [30, 60, 120] {
+                let visible = status(&state, columns);
+                assert_eq!(visible.width(), columns, "{setup:?}: {visible:?}");
+            }
         }
+        feed(&mut state, b"\x1b\x1bg");
+        assert!(status(&state, 120).contains("1-40/300 13%"));
     }
 
     #[test]
