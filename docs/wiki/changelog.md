@@ -11,6 +11,10 @@ Every notable change, following [Keep a Changelog 1.1.0](https://keepachangelog.
 
 Changes merged since 0.7.0, not yet in a release.
 
+### Added {#unreleased-added}
+
+- Syntax highlighting for source files and for fenced code blocks in every document format, including Jupyter code cells. Built-in lexers cover every language mu shows as source code, about 50 in all: the C family, Rust, Go, Python, Ruby, JavaScript and TypeScript, shells, SQL, the JVM and functional languages, config files and diffs. A source file's language comes from its extension or its `#!` line, and a code block's from its info string. Unknown languages stay plain, and output without color is unchanged
+
 ## 0.7.0 · 2026-11-09 {#v0-7-0}
 
 ### Added {#v0-7-0-added}
