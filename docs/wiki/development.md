@@ -60,6 +60,14 @@ Past changes: `multi-format` (0.2.0), `images` (0.3.0), `url-input` (0.4.0), `pa
 - Feature branches merge with `--no-ff` and a descriptive message (“Merge HTML presenter”), so each feature reads as one unit in `git log --first-parent`.
 - Every user-visible change adds a line under `## Unreleased` in `CHANGELOG.md` in the same commit or merge. Write for the user of the tool, not the code: “JSON input is re-indented”, not “add json.rs”. Internal-only changes get no entry.
 
+## Wiki pages {#wiki}
+
+These pages live in the mu repository as `docs/wiki/<slug>.md`, and the wiki serves them from a pinned commit, so a feature and its documentation change together.
+
+- Every user-visible change also updates the pages in `docs/wiki/` it affects, in the same commit or merge that adds its `CHANGELOG.md` line.
+- Each page keeps its front matter (`title`, `group`, `order`, `summary`) and its slug, so links stay stable.
+- `scripts/check-docs.sh [BASE]` fails when `CHANGELOG.md` changed since `BASE` (default: the latest `v*` tag) but nothing under `docs/wiki/` did. It counts uncommitted changes too, so it can run before a commit.
+
 ## Versioning {#versioning}
 
 [Semantic Versioning 2.0.0](https://semver.org). The version lives in one place, `Cargo.toml`, and `mu --version` prints it. While mu is below 1.0:
@@ -75,14 +83,15 @@ From 1.0 on, breaking changes bump MAJOR and features bump MINOR. 1.0 means the 
 ## Releasing {#releasing}
 
 1. Make sure the commit gate passes.
-2. Choose the bump from the table above, using the largest change in `Unreleased`.
-3. Set `version` in `Cargo.toml` and run `cargo build` so `Cargo.lock` updates.
-4. In `CHANGELOG.md`, rename `Unreleased` to `X.Y.Z - YYYY-MM-DD` and open a fresh empty `Unreleased` above it.
-5. Commit as `Release X.Y.Z`, with nothing else in that commit.
-6. Tag it: `git tag -a vX.Y.Z -m "mu X.Y.Z"`.
-7. Check that `cargo run --release -- --version` prints `mu X.Y.Z`.
-8. Push the commit and tag: `git push origin main --follow-tags`.
-9. Publish a GitHub release from the tag, with that version's changelog section as its notes: `gh release create vX.Y.Z --title "mu X.Y.Z" --notes-file <section>`.
+2. Make sure `scripts/check-docs.sh` passes, so the wiki covers everything in `Unreleased`.
+3. Choose the bump from the table above, using the largest change in `Unreleased`.
+4. Set `version` in `Cargo.toml` and run `cargo build` so `Cargo.lock` updates.
+5. In `CHANGELOG.md`, rename `Unreleased` to `X.Y.Z - YYYY-MM-DD` and open a fresh empty `Unreleased` above it.
+6. Commit as `Release X.Y.Z`, with nothing else in that commit.
+7. Tag it: `git tag -a vX.Y.Z -m "mu X.Y.Z"`.
+8. Check that `cargo run --release -- --version` prints `mu X.Y.Z`.
+9. Push the commit and tag: `git push origin main --follow-tags`.
+10. Publish a GitHub release from the tag, with that version's changelog section as its notes: `gh release create vX.Y.Z --title "mu X.Y.Z" --notes-file <section>`.
 
 > [!NOTE]
 > `v0.1.0` predates this process. It marks the last commit released as `mdread`, so it has no `Release` commit and no `CHANGELOG.md` in its tree. Every tag from `v0.2.0` on points at its `Release X.Y.Z` commit.
