@@ -45,7 +45,7 @@ Ships as **0.7.0**, the third release on `FEATURE/ROADMAP.md`.
 
 ## Man pages (roff source)
 
-- **Sniffing:** after JSON and before HTML. Skipping comment lines (`.\"`, `'\"`) and blank lines, the first request is `.TH` or `.Dd`.
+- **Sniffing:** after JSON and before HTML. Skipping comments, blank lines, other requests and `.de` blocks, `.TH` or `.Dd` comes before any text line.
 - **Requests mapped to document events:**
 
   | Requests | Becomes |
@@ -53,10 +53,12 @@ Ships as **0.7.0**, the third release on `FEATURE/ROADMAP.md`.
   | `.TH name section …`, `.Dt` | H1 `NAME(SECTION)` |
   | `.SH`, `.Sh` | H2 |
   | `.SS`, `.Ss` | H3 |
-  | `.PP` `.LP` `.P` `.Pp` | a paragraph break |
+  | `.PP` `.LP` `.P` `.Pp` | a paragraph break, which also ends a `.TP`/`.IP` list |
+  | a blank line | a paragraph break that keeps the current indent |
+  | `.so file` | a line "See file". The file is not opened |
   | `.TP` | a definition list: the next line is the term, and the text after it is the definition |
   | `.IP tag` | a definition with that tag, or an indented paragraph with no tag |
-  | `.RS`/`.RE` | a block quote, nested |
+  | `.RS`/`.RE` | an indented block, nested. Text right before `.RS` is its label, kept tight against it |
   | `.nf`/`.fi`, `.EX`/`.EE`, `.Bd -literal`/`.Ed`, `.Dl`, `.D1` | a code block, with lines kept as written |
   | `.br` | a line break |
   | `.sp` | a paragraph break |
@@ -68,14 +70,15 @@ Ships as **0.7.0**, the third release on `FEATURE/ROADMAP.md`.
 - **mdoc macros:**
   - `.Nm` `.Nd` `.Fl` `.Ar` `.Op`/`.Oo`/`.Oc` `.Cm` `.Ev` `.Pa` `.Xr` `.Em` `.Sy` `.Li` `.Ql` `.Dq` `.Sq` `.Pq` `.Ns` `.No` `.Va` `.Fn` `.Fa` `.Ft` `.In` `.Ic` `.Ex -std` `.Lk` `.Mt`
   - Lists: `.Bl -tag`/`-bullet`/`-dash`/`-enum`/`-item`/`-column` with `.It`, and `.El`
-  - `.Dd`, `.Os`, `.Ux`, `.Bx` and `.At` print their usual short text, or nothing
+  - `.Dd` and `.Os` print nothing. `.Ux`, `.Bx` and `.At` print their usual short names, `.St` names common standards, and `.Ex -std` and `.Rv -std` print the standard sentences
 - **Inline escapes:**
   - Fonts: `\fB` `\fI` `\fR` `\fP` `\f(CW` `\f[…]`
   - Characters: `\-` `\e` `\&` `\ ` `\~` `\0` `\|` `\^` `\c`
   - Named characters: `\(xx` and `\[name]` for the common set (`em en bu aq dq lq rq oq cq co rg tm hy` and the arrows), and `\*(lq` style strings
-  - Anything unknown is dropped
+  - Escapes that take an argument (`\s` `\m` `\w` `\h` `\v` …) print nothing
+  - Any other unknown escape prints its character, as roff does
 - **Comments:** `.\"`, `\"` to the end of the line, and `\#` are dropped.
-- **Other requests:** unknown requests (`.ad`, `.na`, `.hy`, `.ne`, `.ds`, `.de`, `.so`, `.TS`…) are skipped, and the text lines after them still show. A `.TS`/`.TE` table shows as a code block of its raw lines.
+- **Other requests:** unknown requests (`.ad`, `.na`, `.hy`, `.ne`, `.ds`…) are skipped, `.de`/`.ig` blocks are skipped up to `..`, and the text lines after them still show. A `.TS`/`.TE` table shows as a code block of its raw lines.
 - **Outline:** sections and subsections.
 
 ## Man pages (formatted output)
@@ -140,6 +143,6 @@ Ships as **0.7.0**, the third release on `FEATURE/ROADMAP.md`.
 
 - Highlighting source files and notebook code, which comes in 0.9.0
 - Gzipped man pages (`ls.1.gz`), until 0.8.0 brings inflate. Use `gunzip -c ls.1.gz | mu`
-- `.so` includes, macro definitions (`.de`), tbl layout, eqn, pic
+- Following `.so` includes, expanding macro definitions (`.de`), tbl layout, eqn, pic
 - Notebook widgets, JavaScript outputs and LaTeX rendering (`$…$` stays as written)
 - Sniffing source code other than shebang scripts

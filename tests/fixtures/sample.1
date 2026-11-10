@@ -1,0 +1,43 @@
+.\" sample.1: a man page using the man macros
+.TH SAMPLE 1 "2026-11-09" "mu 0.7.0" "User Commands"
+.SH NAME
+sample \- show a page of text
+.SH SYNOPSIS
+.B sample
+[\fB\-v\fR]
+[\fB\-w\fR \fIwidth\fR]
+.IR file ...
+.SH DESCRIPTION
+.B sample
+prints each
+.I file
+to standard output, with \(lqcurly quotes\(rq and an em\(emdash.
+.PP
+A second paragraph that is long enough to wrap onto another line at sixty columns.
+.SS Options
+.TP
+.B \-v
+Print more.
+.TP
+.BI \-w " width"
+Wrap at
+.I width
+columns.
+
+The default is 80.
+.IP \(bu 2
+A bullet.
+.IP \(bu
+Another bullet.
+.SH EXAMPLES
+.EX
+sample -w 40 notes.txt | less
+.EE
+.RS
+Indented note.
+.RE
+.SH SEE ALSO
+.BR cat (1),
+.UR https://example.org/sample
+the sample site
+.UE .

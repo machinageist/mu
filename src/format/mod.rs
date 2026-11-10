@@ -7,6 +7,7 @@
 mod asciidoc;
 mod csv;
 mod html;
+mod man;
 mod org;
 mod rst;
 
@@ -32,10 +33,11 @@ pub enum Format {
     Tsv,
     Xml,
     Code,
+    Man,
 }
 
 // Names accepted by --format, first one is canonical
-const NAMES: [(Format, &[&str]); 12] = [
+const NAMES: [(Format, &[&str]); 13] = [
     (Format::Markdown, &["markdown", "md"]),
     (Format::Html, &["html", "htm"]),
     (Format::Rst, &["rst", "restructuredtext"]),
@@ -48,10 +50,11 @@ const NAMES: [(Format, &[&str]); 12] = [
     (Format::Tsv, &["tsv"]),
     (Format::Xml, &["xml", "plist"]),
     (Format::Code, &["code", "text"]),
+    (Format::Man, &["man", "roff", "mdoc"]),
 ];
 
 // File extensions, matched case-insensitively
-const EXTENSIONS: [(Format, &[&str]); 12] = [
+const EXTENSIONS: [(Format, &[&str]); 13] = [
     (Format::Markdown, &["md", "markdown", "mdown", "mkd"]),
     (Format::Html, &["html", "htm", "xhtml"]),
     (Format::Rst, &["rst", "rest"]),
@@ -162,10 +165,11 @@ const EXTENSIONS: [(Format, &[&str]); 12] = [
             "properties",
         ],
     ),
+    (Format::Man, &["man", "mdoc"]),
 ];
 
 // Media types from a Content-Type header, matched without parameters, case-insensitively
-const MEDIA_TYPES: [(Format, &[&str]); 12] = [
+const MEDIA_TYPES: [(Format, &[&str]); 13] = [
     (Format::Markdown, &["text/markdown", "text/x-markdown"]),
     (Format::Html, &["text/html", "application/xhtml+xml"]),
     (Format::Rst, &["text/x-rst", "text/prs.fallenstein.rst"]),
@@ -217,12 +221,16 @@ const MEDIA_TYPES: [(Format, &[&str]); 12] = [
             "application/sql",
         ],
     ),
+    (Format::Man, &["text/troff", "application/x-troff-man"]),
 ];
 
 // Structured-syntax suffix for JSON media types such as application/problem+json
 const JSON_SUFFIX: &str = "+json";
 // Structured-syntax suffix for XML types such as image/svg+xml; xhtml is matched as HTML first
 const XML_SUFFIX: &str = "+xml";
+// Man page sections, and the longest suffix such as `3pm` or `1ssl`
+const MAN_SECTIONS: &str = "123456789";
+const MAX_MAN_SUFFIX: usize = 6;
 const URL_SCHEME_SEPARATOR: &str = "://";
 const URL_PATH_START: char = '/';
 const URL_PATH_ENDS: [char; 2] = ['?', '#'];
@@ -244,6 +252,7 @@ impl Format {
             .iter()
             .find(|(_, exts)| exts.contains(&ext.as_str()))
             .map(|(format, _)| *format)
+            .or_else(|| is_man_section(&ext).then_some(Format::Man))
     }
 
     // Look up a Content-Type value such as `text/html; charset=utf-8`
@@ -286,6 +295,16 @@ impl Format {
     }
 }
 
+// A man page section suffix: a digit 1-9, optionally followed by letters (`3p`, `1ssl`)
+fn is_man_section(ext: &str) -> bool {
+    let mut chars = ext.chars();
+    chars
+        .next()
+        .is_some_and(|first| MAN_SECTIONS.contains(first))
+        && ext.len() <= MAX_MAN_SUFFIX
+        && chars.all(|ch| ch.is_ascii_lowercase())
+}
+
 // Pick a format from the path's extension, else from the content, else Markdown
 pub fn detect(path: Option<&str>, input: &str) -> Format {
     path.and_then(Format::from_path)
@@ -304,6 +323,8 @@ pub fn sniff(input: &str) -> Format {
         Format::Code
     } else if data::json::sniff(head) {
         Format::Json
+    } else if man::sniff(head) {
+        Format::Man
     } else if html::sniff(head) {
         Format::Html
     } else if data::xml::sniff(head) {
@@ -341,6 +362,7 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
         Format::Rst => render_events(rst::events(input), options, input.len()),
         Format::Org => render_events(org::events(input), options, input.len()),
         Format::AsciiDoc => render_events(asciidoc::events(input), options, input.len()),
+        Format::Man => render_events(man::events(input), options, input.len()),
         Format::Json => no_headings(data::print(&data::json::highlight(input), options)),
         Format::Yaml => no_headings(data::print(&data::yaml::highlight(input), options)),
         Format::Toml => no_headings(data::print(&data::toml::highlight(input), options)),
@@ -372,6 +394,13 @@ mod tests {
         assert_eq!(Format::from_path("lib.h"), Some(Format::Code));
         assert_eq!(Format::from_path("build.sh"), Some(Format::Code));
         assert_eq!(Format::from_name("text"), Some(Format::Code));
+        assert_eq!(Format::from_path("ls.1"), Some(Format::Man));
+        assert_eq!(Format::from_path("printf.3p"), Some(Format::Man));
+        assert_eq!(Format::from_path("openssl.1ssl"), Some(Format::Man));
+        assert_eq!(Format::from_path("page.mdoc"), Some(Format::Man));
+        assert_eq!(Format::from_path("backup.0"), None);
+        assert_eq!(Format::from_path("x.1.bak"), None);
+        assert_eq!(Format::from_name("roff"), Some(Format::Man));
     }
 
     #[test]
@@ -400,6 +429,7 @@ mod tests {
             Some(Format::Markdown)
         );
         assert_eq!(Format::from_media_type("text/x-csrc"), Some(Format::Code));
+        assert_eq!(Format::from_media_type("text/troff"), Some(Format::Man));
         assert_eq!(Format::from_media_type("text/plain"), None);
         assert_eq!(Format::from_media_type("application/octet-stream"), None);
     }

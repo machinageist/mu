@@ -22,6 +22,8 @@ use crate::table::{self, Cell, Table};
 
 // List and task glyphs
 const BULLETS: [&str; 3] = ["•", "◦", "▪"];
+// A definition's body sits this far in from its term
+const DEFINITION_INDENT: usize = 4;
 const TASK_DONE: &str = "☑";
 const TASK_TODO: &str = "☐";
 
@@ -86,6 +88,7 @@ enum ContainerKind {
     Quote,
     Item,
     Footnote,
+    Definition,
 }
 
 // A gutter that prefixes every line inside a quote, list item or footnote
@@ -433,12 +436,14 @@ impl<'o> Renderer<'o> {
                 ..
             } => self.start_link(link_type, &dest_url),
             Tag::Image { dest_url, .. } => self.start_image(&dest_url),
-            Tag::TableRow
-            | Tag::Superscript
-            | Tag::Subscript
-            | Tag::DefinitionList
-            | Tag::DefinitionListTitle
-            | Tag::DefinitionListDefinition => {}
+            Tag::DefinitionList => self.begin_block(),
+            Tag::DefinitionListTitle => {
+                self.begin_block();
+                self.inline.begin(Style::PLAIN);
+                self.inline_open = true;
+            }
+            Tag::DefinitionListDefinition => self.start_definition(),
+            Tag::TableRow | Tag::Superscript | Tag::Subscript => {}
         }
     }
 
@@ -470,11 +475,13 @@ impl<'o> Renderer<'o> {
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.inline.pop_style(),
             TagEnd::Link => self.end_link(),
             TagEnd::Image => self.end_image(),
-            TagEnd::Superscript
-            | TagEnd::Subscript
-            | TagEnd::DefinitionList
-            | TagEnd::DefinitionListTitle
-            | TagEnd::DefinitionListDefinition => {}
+            TagEnd::DefinitionList => {
+                self.flush_inline();
+                self.pending_blank = true;
+            }
+            TagEnd::DefinitionListTitle => self.flush_inline(),
+            TagEnd::DefinitionListDefinition => self.end_container(),
+            TagEnd::Superscript | TagEnd::Subscript => {}
         }
     }
 
@@ -660,6 +667,20 @@ impl<'o> Renderer<'o> {
         self.push_marker_container(ContainerKind::Item, &marker, STYLE_BULLET, width);
     }
 
+    // Open a definition body, indented under its term with no marker
+    fn start_definition(&mut self) {
+        self.flush_inline();
+        let indent = " ".repeat(DEFINITION_INDENT);
+        self.containers.push(Container {
+            kind: ContainerKind::Definition,
+            first: indent.clone(),
+            rest: indent,
+            blank: String::new(),
+            width: DEFINITION_INDENT,
+            first_used: false,
+        });
+    }
+
     // Open a footnote definition labelled like its references
     fn start_footnote(&mut self, label: &str) {
         self.begin_block();
@@ -677,7 +698,7 @@ impl<'o> Renderer<'o> {
             return;
         };
         let kind = container.kind;
-        if !container.first_used && kind != ContainerKind::Quote {
+        if !container.first_used && matches!(kind, ContainerKind::Item | ContainerKind::Footnote) {
             self.line_prefix();
             self.out.push('\n');
         }

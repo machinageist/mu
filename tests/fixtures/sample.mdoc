@@ -1,0 +1,41 @@
+.\" sample.mdoc: a man page using the mdoc macros
+.Dd November 9, 2026
+.Dt SAMPLE 1
+.Os
+.Sh NAME
+.Nm sample
+.Nd show a page of text
+.Sh SYNOPSIS
+.Nm
+.Op Fl v
+.Op Fl w Ar width
+.Op Ar
+.Sh DESCRIPTION
+The
+.Nm
+utility prints each
+.Ar file .
+.Bl -tag -width Ds
+.It Fl v
+Print more.
+.It Fl w Ar width
+Wrap at
+.Ar width
+columns
+.Pq default 80 .
+.El
+.Bl -bullet
+.It
+A bullet.
+.It
+Another bullet.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+sample -w 40 notes.txt
+.Ed
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr cat 1 ,
+.Lk https://example.org/sample "the sample site"

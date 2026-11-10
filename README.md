@@ -114,6 +114,7 @@ The bottom row shows the file name, the visible line range, how far through you 
 | XML | `.xml` `.plist` `.svg` `.rss` `.atom` `.xsd` `.xsl` `.xslt` `.opml` | an `<?xml` declaration, a non-HTML `<!DOCTYPE`, or a `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` root | data, re-indented when safe |
 | CSV | `.csv` | 3+ lines with the same number of `,` or `;` fields (checked last, so prose stays Markdown) | table |
 | TSV | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields | table |
+| Man pages | `.1`–`.9` (and `.3p`, `.1ssl`…) `.man` `.mdoc` | a `.TH` or `.Dd` first request, after comments and macro definitions | document |
 | Source code | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line (checked first) | text, verbatim |
 
 Detection from content is deliberately conservative: when in doubt it picks Markdown, which shows plain text correctly too. Use `-f` when it guesses wrong.
@@ -175,7 +176,7 @@ src/
   pager/     built-in pager: raw mode, keys, scrolling, search, outline, resize, status bar
   term.rs    terminal size via TIOCGWINSZ
   lib.rs     public API: render, present, present_outlined, outline, detect, sniff, Format, Options
-  format/    Format enum, detection, dispatch; html, rst, org, asciidoc, csv → events
+  format/    Format enum, detection, dispatch; html, rst, org, asciidoc, man, csv → events
   data/      styled-line printer; json, yaml, toml, xml highlighters
   image/     sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs  event walker: blocks, containers, lists, code frames

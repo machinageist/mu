@@ -30,6 +30,7 @@ cargo fmt --check && cargo test --release && cargo clippy --all-targets -- -D wa
 | `tests/json.rs`, `yaml.rs`, `toml.rs`, `xml.rs` | One file per data format |
 | `tests/csv.rs` | CSV and TSV tables, including the 10-column floor and overflow |
 | `tests/code.rs` | Source files shown verbatim, never read as Markdown |
+| `tests/man.rs` | Man pages with `man` and `mdoc` macros, exact output and the outline |
 | `tests/outline.rs` | Recorded headings point at the lines that show them, in every document format and across widths |
 | `tests/sniff.rs` | Sniffs every fixture against every format, so one format's rule can't quietly claim another's files |
 | `tests/cli_detect.rs` | `--format` through the CLI, and unknown names rejected |

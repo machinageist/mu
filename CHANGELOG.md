@@ -4,6 +4,9 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Added
+- Man pages in roff source are shown as documents: `mu ls.1`, or any `.1` to `.9` page (`.3p`, `.1ssl` too), `.man` or `.mdoc` file. Both the `man` macros (Linux, GNU) and the `mdoc` macros (BSD, macOS) are understood: sections become headings and fill the outline, option lists become terms with indented descriptions, and fonts, escapes, links and examples carry over. Recognised by `text/troff`, `-f man`/`roff`/`mdoc`, and a `.TH` or `.Dd` first request in piped input
+
 ### Fixed
 - Source files (`.c`, `.h`, `.cpp`, `.rs`, `.py`, `.js`, `.go`, `.sh` and about 80 other extensions) are shown verbatim instead of being read as Markdown, which joined lines and ate `*` and `_`. So are piped scripts that start with `#!`. `-f code` (or `-f text`) shows any input verbatim
 

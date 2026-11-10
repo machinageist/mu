@@ -5,7 +5,7 @@ order: 2
 summary: Every format mu reads, and how it picks one
 ---
 
-Five document formats share one layout engine. Four data formats share one printer. Two table formats, CSV and TSV, go through the same table engine as Markdown tables. Source code is shown verbatim.
+Six document formats share one layout engine. Four data formats share one printer. Two table formats, CSV and TSV, go through the same table engine as Markdown tables. Source code is shown verbatim.
 
 ## Supported formats {#supported}
 
@@ -16,6 +16,7 @@ Five document formats share one layout engine. Four data formats share one print
 | reStructuredText | document | `.rst` `.rest` | `.. directive::` lines, `.. _target:`, over-and-underlined titles, `` `text <url>`_ `` links, `:role:` |
 | Org-mode | document | `.org` | `#+KEYWORD:` or `#+BEGIN_` lines, `:PROPERTIES:`, or `*` headings with Org links |
 | AsciiDoc | document | `.adoc` `.asciidoc` `.asc` | `= Title` first line, `:attr:` header lines, `[source,…]` blocks, `\|===` tables |
+| Man pages (roff) | document | `.1` to `.9`, also with letters (`.3p`, `.1ssl`), `.man` `.mdoc` | a `.TH` or `.Dd` request before any text |
 | JSON | data | `.json` `.jsonl` `.geojson` | starts with `{` or `[` and parses as JSON |
 | YAML | data | `.yaml` `.yml` | mostly `key: value` / `- item` lines with a top-level key or `---` |
 | TOML | data | `.toml` | mostly `[table]` and `key = value` lines |
@@ -24,13 +25,13 @@ Five document formats share one layout engine. Four data formats share one print
 | TSV | table | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields |
 | Source code | verbatim text | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line |
 
-XML, CSV and TSV were added in 0.6.0. Source code is listed under Unreleased in the changelog and ships in the next release.
+XML, CSV and TSV were added in 0.6.0. Source code and man pages are listed under Unreleased in the changelog and ship in the next release.
 
 ## Format selection {#selection}
 
 The first rule that gives an answer wins:
 
-1. The `-f` / `--format <name>` flag. Names are `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml` and `code`, plus the aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist` and `text`.
+1. The `-f` / `--format <name>` flag. Names are `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man` and `code`, plus the aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc` and `text`.
 2. For a URL, the response `Content-Type`. `text/plain` and `application/octet-stream` say nothing and are skipped. See [URLs](/wiki/urls#url-format).
 3. The file extension, case-insensitive. For a URL, the extension of its path, never its host.
 4. Content sniffing on the first 8 KB. This is used for stdin and for unknown or missing extensions such as `.txt`.
@@ -47,14 +48,15 @@ Sniffing runs the rules below in a fixed order, most specific first. Every rule 
 |---|---|---|
 | 1 | Source code | The input starts with `#!`, like a script |
 | 2 | JSON | Starts with `{` or `[` and tokenizes as JSON so far |
-| 3 | HTML | A doctype, `html`, `head` or `body` tag comes first |
-| 4 | XML | An `<?xml` declaration with no `<html` after it, a `<!DOCTYPE` that isn't HTML, or a first element named `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` |
-| 5 | Org | `#+KEYWORD` or `#+BEGIN_` line, a `PROPERTIES` drawer, or a star heading plus a described or URL link |
-| 6 | RST | `.. directive::` or `.. _target:` line, an over-and-underlined title after a blank line, or link/role syntax with no Markdown headings or fences |
-| 7 | AsciiDoc | `= Title` first line, `:attr:` header, source block attribute plus delimiter, or a table fence |
-| 8 | TOML | 2+ lines, 80% are tables or `key = value`, and at least one `key = value` |
-| 9 | YAML | 3+ lines, 80% YAML-shaped, a key, a top-level key or `---` or item mapping, and no fences, quotes or tables |
-| 10 | TSV, then CSV | See [below](#table-sniffing) |
+| 3 | Man page | Skipping comments, blank lines, other requests and `.de` macro definitions, a `.TH` or `.Dd` request comes before any text |
+| 4 | HTML | A doctype, `html`, `head` or `body` tag comes first |
+| 5 | XML | An `<?xml` declaration with no `<html` after it, a `<!DOCTYPE` that isn't HTML, or a first element named `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` |
+| 6 | Org | `#+KEYWORD` or `#+BEGIN_` line, a `PROPERTIES` drawer, or a star heading plus a described or URL link |
+| 7 | RST | `.. directive::` or `.. _target:` line, an over-and-underlined title after a blank line, or link/role syntax with no Markdown headings or fences |
+| 8 | AsciiDoc | `= Title` first line, `:attr:` header, source block attribute plus delimiter, or a table fence |
+| 9 | TOML | 2+ lines, 80% are tables or `key = value`, and at least one `key = value` |
+| 10 | YAML | 3+ lines, 80% YAML-shaped, a key, a top-level key or `---` or item mapping, and no fences, quotes or tables |
+| 11 | TSV, then CSV | See [below](#table-sniffing) |
 | — | Markdown | Everything else |
 
 > [!TIP]
@@ -126,6 +128,20 @@ Source files are shown line for line as written. Without this, a `.c` or `.py` f
 - A piped script that starts with `#!` is recognised by that line.
 - `-f code`, or `-f text`, shows any input this way.
 - There's no syntax highlighting yet. Long lines hard-wrap behind a `┆` bar, like data.
+
+## Man pages {#man}
+
+Man pages in roff source are laid out like any other document. mu reads the macros, not the full roff language, so it needs no `groff` or `mandoc` installed.
+
+- Both macro sets are understood: `man` (Linux and GNU pages) and `mdoc` (BSD and macOS pages, which start with `.Dd`).
+- `.TH` or `.Dt` becomes the title, such as `LS(1)`. Sections and subsections become headings and fill the [outline](/wiki/pager#outline).
+- Option lists (`.TP`, `.IP`, `.Bl -tag`) become a term with its description indented under it. Bullet and numbered lists become lists. `.RS`/`.RE` indent.
+- Examples (`.nf`, `.EX`, `.Bd -literal`) become code blocks, kept as written.
+- Fonts (`\fB`, `.B`, `.BR`…) become bold and italic, and escapes such as `\-`, `\(em` and `\[u00E9]` become their characters. mdoc's `.Fl`, `.Ar`, `.Op`, `.Xr`, `.Nm` and friends read the way `man` shows them: `.Op Fl v` is `[-v]`.
+- `.UR`/`.UE`, `.MT`/`.ME` and `.Lk` are links.
+- Requests mu doesn't know are skipped, and the text after them still shows. Macro definitions (`.de`) are skipped, not run.
+
+Pages under `/usr/share/man` work directly: `mu /usr/share/man/man1/ls.1`. Compressed pages (`ls.1.gz`) aren't read yet, so use `gunzip -c ls.1.gz | mu`. A page that is only `.so other.1` shows "See other.1".
 
 ## Tables {#tables}
 
