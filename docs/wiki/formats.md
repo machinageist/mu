@@ -46,17 +46,18 @@ Sniffing runs the rules below in a fixed order, most specific first. Every rule 
 
 | # | Format | Rule |
 |---|---|---|
-| 1 | Source code | The input starts with `#!`, like a script |
-| 2 | JSON | Starts with `{` or `[` and tokenizes as JSON so far |
-| 3 | Man page | Skipping comments, blank lines, other requests and `.de` macro definitions, a `.TH` or `.Dd` request comes before any text |
-| 4 | HTML | A doctype, `html`, `head` or `body` tag comes first |
-| 5 | XML | An `<?xml` declaration with no `<html` after it, a `<!DOCTYPE` that isn't HTML, or a first element named `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` |
-| 6 | Org | `#+KEYWORD` or `#+BEGIN_` line, a `PROPERTIES` drawer, or a star heading plus a described or URL link |
-| 7 | RST | `.. directive::` or `.. _target:` line, an over-and-underlined title after a blank line, or link/role syntax with no Markdown headings or fences |
-| 8 | AsciiDoc | `= Title` first line, `:attr:` header, source block attribute plus delimiter, or a table fence |
-| 9 | TOML | 2+ lines, 80% are tables or `key = value`, and at least one `key = value` |
-| 10 | YAML | 3+ lines, 80% YAML-shaped, a key, a top-level key or `---` or item mapping, and no fences, quotes or tables |
-| 11 | TSV, then CSV | See [below](#table-sniffing) |
+| 1 | Man output | 8+ backspace overstrikes, as `man ls \| mu` sends, or SGR bold and underline under a `LS(1) … LS(1)` header line |
+| 2 | Source code | The input starts with `#!`, like a script |
+| 3 | JSON | Starts with `{` or `[` and tokenizes as JSON so far |
+| 4 | Man page | Skipping comments, blank lines, other requests and `.de` macro definitions, a `.TH` or `.Dd` request comes before any text |
+| 5 | HTML | A doctype, `html`, `head` or `body` tag comes first |
+| 6 | XML | An `<?xml` declaration with no `<html` after it, a `<!DOCTYPE` that isn't HTML, or a first element named `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` |
+| 7 | Org | `#+KEYWORD` or `#+BEGIN_` line, a `PROPERTIES` drawer, or a star heading plus a described or URL link |
+| 8 | RST | `.. directive::` or `.. _target:` line, an over-and-underlined title after a blank line, or link/role syntax with no Markdown headings or fences |
+| 9 | AsciiDoc | `= Title` first line, `:attr:` header, source block attribute plus delimiter, or a table fence |
+| 10 | TOML | 2+ lines, 80% are tables or `key = value`, and at least one `key = value` |
+| 11 | YAML | 3+ lines, 80% YAML-shaped, a key, a top-level key or `---` or item mapping, and no fences, quotes or tables |
+| 12 | TSV, then CSV | See [below](#table-sniffing) |
 | — | Markdown | Everything else |
 
 > [!TIP]
@@ -140,6 +141,10 @@ Man pages in roff source are laid out like any other document. mu reads the macr
 - Fonts (`\fB`, `.B`, `.BR`…) become bold and italic, and escapes such as `\-`, `\(em` and `\[u00E9]` become their characters. mdoc's `.Fl`, `.Ar`, `.Op`, `.Xr`, `.Nm` and friends read the way `man` shows them: `.Op Fl v` is `[-v]`.
 - `.UR`/`.UE`, `.MT`/`.ME` and `.Lk` are links.
 - Requests mu doesn't know are skipped, and the text after them still shows. Macro definitions (`.de`) are skipped, not run.
+
+### Piped from man {#man-output}
+
+`man ls | mu` works too. When `man` writes to a pipe it marks bold as `X` backspace `X` and underline as `_` backspace `X`, which shows up as junk in most tools. mu turns these back into bold and underline and keeps `man`'s own layout, line for line. Lines that are entirely bold become the outline: sections at the margin, subsections indented up to 3 columns. SGR styling, from `groff -T utf8` or `MAN_KEEP_FORMATTING=1`, is understood the same way.
 
 Pages under `/usr/share/man` work directly: `mu /usr/share/man/man1/ls.1`. Compressed pages (`ls.1.gz`) aren't read yet, so use `gunzip -c ls.1.gz | mu`. A page that is only `.so other.1` shows "See other.1".
 

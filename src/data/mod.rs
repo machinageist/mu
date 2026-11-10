@@ -6,6 +6,7 @@
 
 pub mod code;
 pub mod json;
+pub mod overstrike;
 pub mod toml;
 pub mod xml;
 pub mod yaml;
@@ -27,14 +28,22 @@ const MIN_DATA_WIDTH: usize = 8;
 
 // Write styled lines, hard-wrapping long ones behind a dashed continuation bar
 pub fn print(lines: &[StyledLine], options: &Options) -> String {
+    print_counted(lines, options).0
+}
+
+// Write styled lines, also returning the output line each input line starts on
+pub fn print_counted(lines: &[StyledLine], options: &Options) -> (String, Vec<usize>) {
     let mut printer = Printer {
         out: String::new(),
         color: options.color,
         limit: options.width.max(MIN_DATA_WIDTH),
         column: 0,
         active: Style::PLAIN,
+        lines: 0,
     };
+    let mut starts = Vec::with_capacity(lines.len());
     for line in lines {
+        starts.push(printer.lines);
         for (style, text) in line {
             for ch in text.chars() {
                 printer.push(ch, *style);
@@ -42,7 +51,7 @@ pub fn print(lines: &[StyledLine], options: &Options) -> String {
         }
         printer.end_line();
     }
-    printer.out
+    (printer.out, starts)
 }
 
 struct Printer {
@@ -51,6 +60,8 @@ struct Printer {
     limit: usize,
     column: usize,
     active: Style,
+    // Newlines written so far
+    lines: usize,
 }
 
 impl Printer {
@@ -96,6 +107,7 @@ impl Printer {
         }
         self.out.push('\n');
         self.column = 0;
+        self.lines += 1;
     }
 }
 

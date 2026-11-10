@@ -30,6 +30,7 @@ A terminal presenter that turns markup and data into readable, styled, wrapped t
 | CSV | table | `.csv` |
 | TSV | table | `.tsv` `.tab` |
 | Man pages (roff, `man` and `mdoc` macros) | document | `.1`–`.9` with optional letters, `.man`, `.mdoc` |
+| Formatted man output (`man ls \| mu`) | text, overstrikes as bold and underline | sniffed only |
 | Source code | verbatim text | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.go` `.sh` and about 80 more; `-f code` or `-f text` for anything |
 
 Document formats share one layout engine. Each one gets the same headings, lists, quotes, tables, code frames, links and pager. Data formats are syntax-highlighted. Source code is shown line for line as written, with no Markdown interpretation, and long lines hard-wrap like data. Valid JSON is also re-indented, and XML is re-indented when its tags balance and no element mixes text with child elements.
@@ -45,7 +46,7 @@ Tables (CSV and TSV) go through the same table engine as Markdown tables:
 1. `-f/--format <name>` flag
 2. For a URL, the response `Content-Type`. `text/plain` and `application/octet-stream` are skipped
 3. File extension (case-insensitive), or for a URL the extension of its path, never its host
-4. Content sniffing on the first 8 KB: used for stdin and for unknown or missing extensions. The order is a `#!` shebang (source code), JSON, man page, HTML, XML, Org, RST, AsciiDoc, TOML, YAML, then CSV/TSV, and each rule is conservative
+4. Content sniffing on the first 8 KB: used for stdin and for unknown or missing extensions. The order is formatted man output (overstrikes), a `#!` shebang (source code), JSON, man page, HTML, XML, Org, RST, AsciiDoc, TOML, YAML, then CSV/TSV, and each rule is conservative
 5. Fallback: Markdown, which shows plain text correctly too
 
 `tests/sniff.rs` pins every fixture to its format. A sniffing change must keep it green.

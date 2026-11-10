@@ -1,0 +1,35 @@
+SAMPLE(1)                    User Commands                   SAMPLE(1)
+
+NNAAMMEE
+     sample - show a page of text
+
+SSYYNNOOPPSSIISS
+     ssaammppllee [--vv] [--ww _w_i_d_t_h] _f_i_l_e...
+
+DDEESSCCRRIIPPTTIIOONN
+     ssaammppllee prints each _f_i_l_e to standard output, with “curly quotes”
+     and an em—dash.
+
+     A second paragraph that is long enough to wrap onto another line
+     at sixty columns.
+
+   OOppttiioonnss
+     --vv     Print more.
+
+     --ww _w_i_d_t_h
+            Wrap at _w_i_d_t_h columns.
+
+            The default is 80.
+
+     • A bullet.
+
+     • Another bullet.
+
+EEXXAAMMPPLLEESS
+     sample -w 40 notes.txt | less
+            Indented note.
+
+SSEEEE AALLSSOO
+     ccaatt(1), the sample site <https://example.org/sample>.
+
+mu 0.7.0                      2026-11-09                     SAMPLE(1)

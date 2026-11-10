@@ -10,6 +10,10 @@ use mu::{Format, Options, detect, present_outlined, sniff};
 
 const MAN_FIXTURE: &str = include_str!("fixtures/sample.1");
 const MDOC_FIXTURE: &str = include_str!("fixtures/sample.mdoc");
+// The man fixture as `man` formats it for a terminal, with backspace overstrikes
+const OUTPUT_FIXTURE: &str = include_str!("fixtures/sample-man-output.txt");
+const OUTPUT_WIDTH: usize = 80;
+const BACKSPACE: char = '\u{8}';
 const WIDTH: usize = 60;
 
 // The man-macro fixture at sixty columns
@@ -72,4 +76,69 @@ fn malformed_roff_still_renders() {
 fn man_pages_keep_the_output_invariants() {
     assert_invariants(MAN_FIXTURE, Format::Man);
     assert_invariants(MDOC_FIXTURE, Format::Man);
+}
+
+// Remove each overstrike: a character, a backspace, and the character struck over it
+fn without_overstrikes(text: &str) -> String {
+    let mut out: Vec<char> = Vec::new();
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch == BACKSPACE {
+            let before = out.pop();
+            if let Some(after) = chars.next() {
+                out.push(if before == Some('_') {
+                    after
+                } else {
+                    before.unwrap_or(after)
+                });
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out.into_iter().collect()
+}
+
+#[test]
+fn formatted_output_is_sniffed() {
+    assert_eq!(sniff(OUTPUT_FIXTURE), Format::Man);
+    assert_eq!(detect(Some("page.txt"), OUTPUT_FIXTURE), Format::Man);
+}
+
+#[test]
+fn formatted_output_keeps_its_text() {
+    assert_eq!(
+        plain(OUTPUT_FIXTURE, Format::Man, OUTPUT_WIDTH),
+        without_overstrikes(OUTPUT_FIXTURE)
+    );
+}
+
+#[test]
+fn formatted_output_sections_fill_the_outline() {
+    let rendered = present_outlined(
+        OUTPUT_FIXTURE,
+        Format::Man,
+        &Options::new(OUTPUT_WIDTH, false),
+    );
+    let titles: Vec<(u8, &str, usize)> = rendered
+        .headings
+        .iter()
+        .map(|heading| (heading.level, heading.text.as_str(), heading.line))
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            (2, "NAME", 2),
+            (2, "SYNOPSIS", 5),
+            (2, "DESCRIPTION", 8),
+            (3, "Options", 15),
+            (2, "EXAMPLES", 27),
+            (2, "SEE ALSO", 31),
+        ]
+    );
+}
+
+#[test]
+fn formatted_output_keeps_the_output_invariants() {
+    assert_invariants(OUTPUT_FIXTURE, Format::Man);
 }

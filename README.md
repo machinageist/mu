@@ -115,6 +115,7 @@ The bottom row shows the file name, the visible line range, how far through you 
 | CSV | `.csv` | 3+ lines with the same number of `,` or `;` fields (checked last, so prose stays Markdown) | table |
 | TSV | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields | table |
 | Man pages | `.1`–`.9` (and `.3p`, `.1ssl`…) `.man` `.mdoc` | a `.TH` or `.Dd` first request, after comments and macro definitions | document |
+| Man output (`man ls \| mu`) | — | backspace overstrikes, checked first | text with bold and underline, as `man` laid it out |
 | Source code | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line (checked first) | text, verbatim |
 
 Detection from content is deliberately conservative: when in doubt it picks Markdown, which shows plain text correctly too. Use `-f` when it guesses wrong.

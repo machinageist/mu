@@ -85,12 +85,13 @@ Ships as **0.7.0**, the third release on `FEATURE/ROADMAP.md`.
 
 `man ls | mu` arrives as formatted text with overstrikes: `X\bX` for bold and `_\bX` for underline.
 
-- **Sniffing:** first in the sniff order. It fires when the head holds at least 8 overstrikes.
+- **Sniffing:** first in the sniff order. It fires when the head holds at least 8 backspaces, or at least 4 SGR bold or underline codes under a first line shaped like a page header (`LS(1) … LS(1)`).
 - **Output:**
   - Overstrikes become bold or underlined text, and the other backspaces are removed.
   - Lines are kept as written, through the data printer.
-  - SGR sequences already in the input (`MAN_KEEP_FORMATTING`, `groff -T utf8`) are kept as styles: only bold, underline and reset are understood, and anything else is scrubbed.
-- **Outline:** each line that starts at column 0 and is entirely bold, except the first and last lines, which are the page header and footer.
+  - SGR sequences already in the input (`MAN_KEEP_FORMATTING`, `groff -T utf8`) are kept as styles: bold, underline (italic shows as underline) and their resets are understood. Other escape sequences, OSC 8 links included, are removed.
+  - `+` struck over `o` is a bullet `•`.
+- **Outline:** each line whose visible text is entirely bold, except the first and last lines, which are the page header and footer. Lines at column 0 are sections (level 2), and lines indented 1 to 3 columns are subsections (level 3). These lines take the heading colors.
 - **Format:** the same `Man` format as roff source. The presenter checks for overstrikes or SGR before parsing roff.
 
 ## Jupyter notebooks

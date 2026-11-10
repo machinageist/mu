@@ -319,7 +319,9 @@ pub fn sniff(input: &str) -> Format {
     }
     let head = &input[..end];
     // Most specific signals first; YAML last because loose prose can look like it
-    if data::code::sniff(head) {
+    if data::overstrike::sniff(head) {
+        Format::Man
+    } else if data::code::sniff(head) {
         Format::Code
     } else if data::json::sniff(head) {
         Format::Json
@@ -362,6 +364,7 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
         Format::Rst => render_events(rst::events(input), options, input.len()),
         Format::Org => render_events(org::events(input), options, input.len()),
         Format::AsciiDoc => render_events(asciidoc::events(input), options, input.len()),
+        Format::Man if data::overstrike::is_formatted(input) => man_output(input, options),
         Format::Man => render_events(man::events(input), options, input.len()),
         Format::Json => no_headings(data::print(&data::json::highlight(input), options)),
         Format::Yaml => no_headings(data::print(&data::yaml::highlight(input), options)),
@@ -375,6 +378,16 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
             csv::CSV_MIN_COLUMN,
         ),
     }
+}
+
+// Print formatted man output, mapping its headings to the lines they land on
+fn man_output(input: &str, options: &Options) -> Rendered {
+    let (lines, mut headings) = data::overstrike::lines(input);
+    let (text, starts) = data::print_counted(&lines, options);
+    for heading in &mut headings {
+        heading.line = starts[heading.line];
+    }
+    Rendered { text, headings }
 }
 
 #[cfg(test)]
