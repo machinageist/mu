@@ -5,6 +5,10 @@
 // resize re-renders the document instead of reflowing old lines. Every rendered line closes its
 // own style, which is what lets any window of lines be drawn on its own
 
+// Wired into the pager loop in the next task
+#[allow(dead_code)]
+mod search;
+
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::mem::MaybeUninit;
