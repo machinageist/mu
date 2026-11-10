@@ -10,7 +10,7 @@ How input becomes terminal output, traced through the real functions. Each map l
 
 ## 1 · End to end {#map-1}
 
-The two paths through mu. Input is a file, stdin or a URL fetched with curl. Documents become one event stream that a single layout engine lays out. Data formats become styled lines for a simpler printer. Both produce plain lines with their own SGR styling, which either print once or open in the pager.
+The two paths through mu. Input is a file, stdin or a URL fetched with curl. Documents become one event stream that a single layout engine lays out, and CSV and TSV join that stream as table events. Data formats and source code become styled lines for a simpler printer. Both produce plain lines with their own SGR styling, which either print once or open in the pager.
 
 ```mermaid
 flowchart LR
@@ -21,10 +21,14 @@ flowchart LR
   DET -->|"-f, Content-Type, extension, or sniff"| P["present"]
   P -->|"Markdown"| PC["pulldown-cmark Parser"]
   P -->|"HTML, RST, Org, AsciiDoc"| FP["format::*::events<br/>hand-written parsers"]
+  P -->|"CSV, TSV"| CS["csv::events<br/>header row, numbers right-aligned"]
   PC --> EV["pulldown-cmark Event stream"]
   FP --> EV
-  EV --> RE["render_events<br/>shared layout engine"]
-  P -->|"JSON, YAML, TOML"| HL["data::*::highlight"]
+  CS --> EV
+  EV --> RE["render_events<br/>shared layout engine, records headings"]
+  P -->|"JSON, YAML, TOML, XML"| HL["data::*::highlight"]
+  P -->|"source code"| CL["data::code::lines<br/>verbatim"]
+  CL --> SL
   HL --> SL["Styled lines"]
   SL --> DP["data::print"]
   RE --> OUT["Terminal lines<br/>each closes its own style"]
@@ -36,13 +40,14 @@ flowchart LR
 
 - `src/main.rs:main` drives everything
 - `src/fetch.rs` URL input
-- `src/format/mod.rs:present` picks the path
-- `src/render.rs:render_events` documents
+- `src/format/mod.rs:present_outlined` picks the path
+- `src/render.rs:render_events` documents, `render_table_events` CSV and TSV
+- `src/format/csv.rs:events` CSV and TSV records
 - `src/data/mod.rs:print` data
 
 ## 2 · CLI entry {#map-2}
 
-What `main` does from arguments to exit code. Files and URLs both load into a `Source`, which `show` renders the same way. A closed pipe such as `mu x.md | head` counts as success.
+What `main` does from arguments to exit code. Files and URLs both load into a `Source`, which `show` renders the same way. `--toc` prints the outline and skips the pager. A closed pipe such as `mu x.md | head` counts as success.
 
 ```mermaid
 flowchart TD
@@ -60,7 +65,10 @@ flowchart TD
   LU --> SRC["Source: parts, title, base,<br/>image mode, HTTP failure"]
   LF --> SRC
   SRC --> SH["show<br/>Options: resolve_width, resolve_color,<br/>resolve_images"]
-  SH --> P["present_all<br/>each part in its own format, half-blocks"]
+  SH --> TOC{"--toc?"}
+  TOC -->|"yes"| OL["outline of present_all's headings,<br/>images off"]
+  OL --> WR
+  TOC -->|"no"| P["present_all<br/>each part in its own format, half-blocks"]
   P --> SP{"should_page?"}
   SP -->|"yes"| SO{"pager::Session::open<br/>/dev/tty usable?"}
   SO -->|"yes"| RUN["session.run titled with the file or URL,<br/>relayout closure"]
@@ -78,7 +86,7 @@ flowchart TD
 
 | Decision | Rule |
 | --- | --- |
-| resolve_width | `-w N` wins, at least 20. Otherwise the terminal width, clamped to 20–100. With no terminal, 80. The width is probed on stdout, then stderr, then stdin, so `mu x \| less -R` still sees the real width. |
+| resolve_width | `-w N` wins, at least 20. Otherwise the terminal width, clamped to 20–100, or with no upper cap for CSV and TSV. With no terminal, 80. The width is probed on stdout, then stderr, then stdin, so `mu x \| less -R` still sees the real width. |
 | resolve_color | `always` / `never` as given. With `auto`, color is on when stdout is a terminal and `NO_COLOR` is unset or empty. |
 | resolve_images | Mode from `--images`, else `fetch` for a URL and `auto` for a file. Base from `--base`, else the file path or the final URL. Cell pixels from TIOCGWINSZ, else 8×16. At most the screen height minus 2 rows. |
 | should_page | Never when stdout is not a terminal. `never` → no, `always` → yes. With `auto`, it pages only when the output has more lines than the screen minus one, like `less -F`. |
@@ -88,23 +96,28 @@ flowchart TD
 - `src/main.rs:show` · `present_all` · `native_protocol`
 - `src/main.rs:resolve_images`
 - `src/main.rs:resolve_width` · `auto_width`
+- `src/outline.rs:outline` for `--toc`
 - `src/main.rs:should_page`
 - `src/term.rs:size` TIOCGWINSZ
 
 ## 3 · Format detection {#map-3}
 
-For a URL, the response `Content-Type` is tried first and then the URL path's extension (map 8). An extension decides immediately. Without one, as with stdin, `.txt` or no extension, the content is sniffed in a fixed order, most specific rule first. Every rule is strict, so uncertain input falls through to Markdown, which shows plain text correctly anyway.
+For a URL, the response `Content-Type` is tried first and then the URL path's extension (map 8). An extension decides immediately. Without one, as with stdin, `.txt` or no extension, the content is sniffed in a fixed order, most specific rule first. Tables come last, so only input nothing else claimed is checked for even columns. Every rule is strict, so uncertain input falls through to Markdown, which shows plain text correctly anyway.
 
 ```mermaid
 flowchart TD
-  A["detect path, input"] --> X{"Known extension?<br/>md html rst org adoc json yaml toml"}
+  A["detect path, input"] --> X{"Known extension?<br/>md html rst org adoc json yaml toml<br/>xml plist svg csv tsv, source files"}
   X -->|"yes"| XF(["Format from extension"])
   X -->|"no"| H["head = first 8 KB<br/>cut back to a char boundary"]
-  H --> J{"JSON?<br/>starts with brace or bracket<br/>and tokenizes as JSON so far"}
+  H --> SB{"Source code?<br/>starts with #35;!"}
+  SB -->|"yes"| FC(["Source code"])
+  SB -->|"no"| J{"JSON?<br/>starts with brace or bracket<br/>and tokenizes as JSON so far"}
   J -->|"yes"| FJ(["JSON"])
   J -->|"no"| HT{"HTML?<br/>doctype, html, head or body tag first"}
   HT -->|"yes"| FH(["HTML"])
-  HT -->|"no"| OR{"Org?<br/>#35;+KEYWORD or #35;+BEGIN_ line, PROPERTIES drawer,<br/>or star heading plus a described or URL link"}
+  HT -->|"no"| XM{"XML?<br/>xml declaration without html,<br/>non-HTML doctype, or a known root:<br/>plist svg rss feed urlset sitemapindex project opml"}
+  XM -->|"yes"| FX(["XML"])
+  XM -->|"no"| OR{"Org?<br/>#35;+KEYWORD or #35;+BEGIN_ line, PROPERTIES drawer,<br/>or star heading plus a described or URL link"}
   OR -->|"yes"| FO(["Org"])
   OR -->|"no"| RS{"RST?<br/>.. directive:: or .. _target: line,<br/>over-and-underlined title after a blank line,<br/>or link/role syntax with no Markdown headings or fences"}
   RS -->|"yes"| FR(["RST"])
@@ -114,17 +127,23 @@ flowchart TD
   TO -->|"yes"| FT(["TOML"])
   TO -->|"no"| YA{"YAML?<br/>3+ lines, 80% shaped, a key,<br/>top-level key or --- or item mapping,<br/>no fences, quotes or tables"}
   YA -->|"yes"| FY(["YAML"])
-  YA -->|"no"| MD(["Markdown"])
+  YA -->|"no"| TB{"Table?<br/>3+ lines, no markup first character,<br/>same field count of 2 or more"}
+  TB -->|"tabs"| FTS(["TSV"])
+  TB -->|"comma or semicolon"| FCS(["CSV"])
+  TB -->|"no"| MD(["Markdown"])
 ```
 
 - `src/format/mod.rs:detect` · `sniff`
+- `src/data/code.rs:sniff`
 - `src/data/json.rs:sniff`
 - `src/format/html.rs:sniff`
+- `src/data/xml.rs:sniff`
 - `src/format/org.rs:sniff` · `has_sniff_link`
 - `src/format/rst.rs:sniff` · `has_markdown_structure`
 - `src/format/asciidoc.rs:sniff`
 - `src/data/toml.rs:sniff`
 - `src/data/yaml.rs:sniff` · `is_prose_value`
+- `src/format/csv.rs:sniff`
 - `tests/sniff.rs` pins every fixture to its format
 
 ## 4 · Document layout {#map-4}
@@ -145,7 +164,7 @@ flowchart TD
   TX -->|"no"| AT["Inline atoms in one arena<br/>words, spaces, styles<br/>control chars become U+FFFD"]
   K -->|"End tag"| EN{"Which tag"}
   EN -->|"Paragraph or Heading"| WRAP["wrap atoms to avail<br/>= width minus gutters, min 16"]
-  WRAP --> EMIT["emit lines behind gutters<br/>H1 and H2 get a rule underneath"]
+  WRAP --> EMIT["emit lines behind gutters<br/>H1 and H2 get a rule underneath,<br/>a heading's level, text and line recorded"]
   EN -->|"CodeBlock or Metadata"| FR["frame: top edge with language,<br/>bar per line, dashed bar on wrap"]
   EN -->|"HtmlBlock"| HB["dim raw HTML, drop comments"]
   EN -->|"Table"| TR["table::render<br/>shrink widest columns, box-draw"]
@@ -163,12 +182,12 @@ flowchart TD
 - `src/render.rs:flush_inline` · `emit_lines` · `line_prefix`
 - `src/render.rs:end_framed` · `verbatim_chunks`
 - `src/inline.rs:Inline` · `wrap` · `push_clean`
-- `src/table.rs:render`
-- `src/format/{html,rst,org,asciidoc}.rs:events` feed this
+- `src/table.rs:render` · `fit_columns`, with a 10-column floor for CSV and TSV
+- `src/format/{html,rst,org,asciidoc,csv}.rs:events` feed this
 
 ## 5 · Data printing {#map-5}
 
-Highlighters only classify text into styled spans. The shared printer owns everything that touches the terminal: tabs, control-character scrubbing, width and SGR. Every data format therefore keeps the same safety and layout guarantees as documents.
+Highlighters only classify text into styled spans. The shared printer owns everything that touches the terminal: tabs, control-character scrubbing, width and SGR. Every data format, and source code, therefore keeps the same safety and layout guarantees as documents.
 
 ```mermaid
 flowchart TD
@@ -178,7 +197,15 @@ flowchart TD
   JV -->|"no"| JR["color line by line as written"]
   F -->|"YAML"| Y["line tokenizer with state<br/>block scalars, quotes, flow collections"]
   F -->|"TOML"| T["line lexer with state<br/>multi-line strings, open arrays"]
+  F -->|"XML"| XT["tokenize: tags, text, comments,<br/>declarations, CDATA"]
+  XT --> XS{"tags balance, no element mixes<br/>text and children, 256 deep or less?"}
+  XS -->|"yes"| XP["one node per line, 2 spaces a level,<br/>text-only elements on one line"]
+  XS -->|"no"| XR["color as written"]
+  F -->|"source code"| CO["lines as written, unstyled"]
   JP --> L["StyledLine = list of style and text spans"]
+  XP --> L
+  XR --> L
+  CO --> L
   JR --> L
   Y --> L
   T --> L
@@ -204,39 +231,61 @@ flowchart TD
 - `src/data/json.rs:highlight` · `sniff`
 - `src/data/yaml.rs:highlight` · `State::line`
 - `src/data/toml.rs:highlight`
+- `src/data/xml.rs:highlight` · `is_safe_to_indent` · `pretty`
+- `src/data/code.rs:lines`
 - `src/data/mod.rs:print` · `Printer::glyph` · `end_line`
 - `src/style.rs` STYLE_DATA_* theme
 
 ## 6 · Pager loop {#map-6}
 
-The built-in pager reads keys from `/dev/tty`, which is why `curl … | mu` can page. A resize arrives through a self-pipe, so `poll` can never miss it. When the width is automatic, a resize re-renders at the new width and keeps the reader's place proportionally.
+The built-in pager reads keys from `/dev/tty`, which is why `curl … | mu` can page. It waits with `select()`, because macOS `poll()` rejects `/dev/tty`. A resize arrives through a self-pipe, so the wait can never miss it. When the width is automatic, a resize re-renders at the new width and keeps the reader's place proportionally, and any search and outline follow the new layout. A key goes to the search prompt or the outline when one is open, and to scrolling otherwise.
 
 ```mermaid
 flowchart TD
   O["Session::open<br/>/dev/tty, raw mode, alternate screen,<br/>panic hook restores the terminal"] --> R["run: route SIGWINCH into a self-pipe"]
-  R --> D["draw_frame<br/>visible lines plus status bar,<br/>one synchronized write"]
-  D --> W["poll tty and resize pipe"]
+  R --> D["draw<br/>visible lines cut at the left column,<br/>matches highlighted, status bar,<br/>or the outline list; one synchronized write"]
+  D --> W["select on tty and resize pipe"]
   W -->|"resize"| RS["drain pipe, read the new size"]
   RS --> RL{"relayout columns:<br/>width is automatic and changed?"}
-  RL -->|"yes"| RR["present again at the new width"]
+  RL -->|"yes"| RR["present again at the new width,<br/>new headings, search rescanned"]
   RL -->|"no"| KEEP["keep the document"]
-  RR --> VR["view.resize<br/>top scaled to the new length"]
+  RR --> VR["Pager::relayout<br/>top scaled to the new length,<br/>left column clamped"]
   KEEP --> VR
   VR --> D
-  W -->|"input"| KEY["read bytes, parse_keys<br/>letters, control keys, CSI escapes"]
-  KEY --> A{"Action"}
-  A -->|"Quit: q or Ctrl-C"| Q(["drop: leave alternate screen,<br/>restore termios"])
-  A -->|"line, page, half page, top, bottom"| CL["view.apply<br/>clamp to 0 .. max_top"]
-  CL --> D
+  W -->|"input"| KEY["read bytes, parse_keys<br/>letters, control keys, UTF-8, CSI escapes"]
   KEY -->|"tty closed"| Q
+  KEY --> MODE{"Pager::handle:<br/>what is open?"}
+  MODE -->|"search prompt"| PR["edit the query;<br/>Enter runs it, Esc cancels"]
+  PR --> SE["run_search<br/>smart-case literal over SGR-stripped lines,<br/>jump to the first match from the top line"]
+  SE --> D
+  MODE -->|"outline"| OL["move the selection;<br/>Enter jumps to the heading, o q Esc close"]
+  OL --> D
+  MODE -->|"nothing"| A{"normal_action"}
+  A -->|"Quit: q or Ctrl-C"| Q(["drop: leave alternate screen,<br/>restore termios"])
+  A -->|"line, page, half page, top, bottom"| CL["View::apply<br/>clamp to 0 .. max_top"]
+  A -->|"/ or ?"| OP["open the prompt"]
+  A -->|"n or N"| ST["step: next or previous match,<br/>wrapping round the ends"]
+  A -->|"o"| OO["open the outline<br/>on the current section"]
+  A -->|"h l, Left Right"| SW["left column by half a window,<br/>up to the widest line"]
+  A -->|"Esc"| CS["clear the search"]
+  CL --> D
+  OP --> D
+  ST --> D
+  OO --> D
+  SW --> D
+  CS --> D
 ```
 
-- `src/pager.rs:Session::open` · `run` · `drop`
-- `src/pager.rs:ResizeSignal` · `on_resize`
-- `src/pager.rs:wait_for_input` poll
-- `src/pager.rs:parse_keys` · `key_action` · `escape_action`
-- `src/pager.rs:View::apply` · `View::resize`
+- `src/pager/mod.rs:Session::open` · `run` · `drop`
+- `src/pager/mod.rs:ResizeSignal` · `on_resize`
+- `src/pager/mod.rs:wait_for_input` select
+- `src/pager/keys.rs:parse_keys` · `normal_action` · `escape_action`
+- `src/pager/mod.rs:Pager::handle` · `run_search` · `step` · `jump` · `relayout`
+- `src/pager/mod.rs:View::apply` · `View::resize` · `cut_left` · `status_line`
+- `src/pager/search.rs:Search` · `highlight` · `strip_sgr`
+- `src/pager/outline.rs:Outline::open` · `apply` · `follow`
 - `src/main.rs` relayout closure
+- `tests/pager_pty.rs` drives it in a pseudo-terminal
 
 ## 7 · Images {#map-7}
 
@@ -333,6 +382,6 @@ flowchart TD
 - `src/format/mod.rs:from_media_type` · `from_url_path`
 - `tests/url.rs` runs against a local server
 
-Drawn from the mu source at v0.4.0. The aspect math in map 7: the scale factor is the smaller of 1, max width in pixels over image width, and max height in pixels over image height. Cells are counted from that one factor, so width and height shrink together.
+Drawn from the mu source at v0.6.0, plus the unreleased source code format. The aspect math in map 7: the scale factor is the smaller of 1, max width in pixels over image width, and max height in pixels over image height. Cells are counted from that one factor, so width and height shrink together.
 
-Source: `docs/muLogicMaps.md` in the mu repository. Diagrams render with Mermaid from a CDN; offline, their source text is shown instead.
+First drawn in `docs/muLogicMaps.md` in the mu repository, which still shows 0.4.0. Diagrams render with Mermaid from a CDN; offline, their source text is shown instead.
