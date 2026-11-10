@@ -47,9 +47,10 @@ src/
   fetch.rs    URL input: curl arguments, raw-file rewrites, response parsing
   pager/      built-in pager: raw mode, keys, scrolling, search, outline, sideways, resize, status bar
   term.rs     terminal size via TIOCGWINSZ
-  lib.rs      public API: render, present, present_outlined, outline, detect, sniff, Format, Options
+  lib.rs      public API: render, present, present_outlined, outline, detect, sniff, sniff_bytes, extract, Format, Options
   outline.rs  heading list shared by --toc and the pager
   format/     Format enum, detection, dispatch; html, rst, org, asciidoc, man, csv → events; jupyter → Markdown
+  book/       binary formats: zip reader, EPUB → HTML, PDF → page text through pdftotext
   data/       styled-line printer; json, yaml, toml, xml highlighters; verbatim code lines
   image/      sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs   event walker: blocks, containers, lists, code frames, headings
@@ -76,16 +77,18 @@ src/
 | `libc` | The `TIOCGWINSZ` ioctl, `termios`, `select` and the resize self-pipe |
 | `png`, `zune-jpeg`, `gif`, `image-webp` | Raster image decoding |
 | `resvg` | SVG rendering, with default features off: no text, no system fonts |
+| `miniz_oxide` | Inflating EPUB zip entries. `png` already depends on it |
 
-Everything else is hand-written: the HTML, RST, Org and AsciiDoc parsers, the CSV and TSV reader, the JSON, YAML, TOML and XML tokenizers, image fitting and resampling, the half-block, Kitty and iTerm2 encoders, base64, and the pager with its search. There's no HTTP or TLS code; URLs go through the system `curl`.
+Everything else is hand-written: the HTML, RST, Org and AsciiDoc parsers, the CSV and TSV reader, the JSON, YAML, TOML and XML tokenizers, image fitting and resampling, the half-block, Kitty and iTerm2 encoders, base64, the zip reader, and the pager with its search. There's no HTTP or TLS code; URLs go through the system `curl`. PDF text comes from poppler's `pdftotext` when it's installed.
 
-The release profile uses `opt-level = 3`, fat LTO, one codegen unit and `strip`, giving a ~2.4 MB binary. It keeps `panic = "unwind"` on purpose, so a panic inside a third-party image decoder can be caught and shown as alt text.
+The release profile uses `opt-level = 3`, fat LTO, one codegen unit and `strip`, giving a ~2.6 MB binary. It keeps `panic = "unwind"` on purpose, so a panic inside a third-party image decoder can be caught and shown as alt text.
 
 ## Library API {#library-api}
 
 The binary is a thin CLI around the `mu` library crate, which exports:
 
 ```rust
+pub use book::{extract, sniff_bytes};
 pub use format::{Format, detect, present, present_outlined, sniff};
 pub use image::{CellSize, ImageMode, ImageOptions, Protocol};
 pub use outline::{outline, outline_entries};
@@ -102,7 +105,9 @@ pub use render::{Heading, Options, Rendered, render};
 | `outline_entries(&[Heading], width) -> Vec<String>` | The same list as plain lines cut to a width |
 | `detect(path: Option<&str>, input) -> Format` | Extension, then sniff, then Markdown |
 | `sniff(input) -> Format` | Content sniffing alone |
-| `Format` | Enum of every format, with `from_name`, `from_path`, `from_media_type`, `from_url_path`, `is_wide`, `name` |
+| `sniff_bytes(bytes) -> Option<Format>` | Magic bytes for EPUB and PDF |
+| `extract(bytes, Format) -> Result<String, String>` | An EPUB's HTML or a PDF's page text, ready for `present`; other formats are decoded as UTF-8 |
+| `Format` | Enum of every format, with `from_name`, `from_path`, `from_media_type`, `from_url_path`, `is_wide`, `is_binary`, `name` |
 | `Options { width, color, images }` | `Options::new(width, color)` builds text-only options with images off |
 | `ImageOptions { mode, base, cell, protocol, max_rows }` | Image loading and drawing settings |
 

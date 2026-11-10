@@ -13,6 +13,7 @@ A terminal presenter that turns markup and data into readable, styled, wrapped t
 - A file path, or stdin when the path is `-` or absent (`cat x | mu`, `curl … | mu`, `mu < x`)
 - An `http://` or `https://` URL, fetched with the system `curl` (see URLs)
 - Bare `mu` at an interactive prompt prints usage instead of waiting on stdin
+- Input is read as bytes. EPUB and PDF are converted from bytes once at load time; every other format is decoded as UTF-8 with invalid bytes replaced
 
 ## Formats
 
@@ -31,10 +32,12 @@ A terminal presenter that turns markup and data into readable, styled, wrapped t
 | TSV | table | `.tsv` `.tab` |
 | Man pages (roff, `man` and `mdoc` macros) | document | `.1`–`.9` with optional letters, `.man`, `.mdoc` |
 | Jupyter notebooks (nbformat 4) | document, built as Markdown | `.ipynb` |
+| EPUB books | document, built as HTML | `.epub` |
+| PDF, through poppler's `pdftotext` | text as laid out on the page, one outline entry per page | `.pdf` |
 | Formatted man output (`man ls \| mu`) | text, overstrikes as bold and underline | sniffed only |
 | Source code | verbatim text | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.go` `.sh` and about 80 more; `-f code` or `-f text` for anything |
 
-Document formats share one layout engine. Each one gets the same headings, lists, quotes, tables, code frames, links and pager. Data formats are syntax-highlighted. Source code is shown line for line as written, with no Markdown interpretation, and long lines hard-wrap like data. Source files and fenced code blocks are syntax-highlighted by language when color is on (extension, `#!` line or info string); highlighting only changes styles, so color output with styling removed equals plain output Valid JSON is also re-indented, and XML is re-indented when its tags balance and no element mixes text with child elements.
+Document formats share one layout engine. Each one gets the same headings, lists, quotes, tables, code frames, links and pager. Data formats are syntax-highlighted. Source code is shown line for line as written, with no Markdown interpretation, and long lines hard-wrap like data. Source files and fenced code blocks are syntax-highlighted by language when color is on (extension, `#!` line or info string); highlighting only changes styles, so color output with styling removed equals plain output. Valid JSON is also re-indented, and XML is re-indented when its tags balance and no element mixes text with child elements.
 
 Tables (CSV and TSV) go through the same table engine as Markdown tables:
 - The first record is the header, and numeric columns are right-aligned.
@@ -42,13 +45,24 @@ Tables (CSV and TSV) go through the same table engine as Markdown tables:
 - With an automatic width they use the full terminal width.
 - Columns shrink no narrower than 10 (or their natural width). Beyond that the table overflows, which the pager scrolls sideways.
 
+EPUB books are read in-process:
+- `META-INF/container.xml` names the package, whose spine gives the reading order. The package's title and creators head the document.
+- Each XHTML spine item's body is joined into one HTML document for the HTML presenter. Other or missing items are skipped.
+- Images (`img src`, SVG `image href`) resolve against the chapter's path in the zip and are inlined as `data:` URIs; a missing image becomes its alt text. Links that are not `http`, `https` or `mailto` lose their href.
+- Zip limits: 10,000 entries, 64 MB per entry, 256 MB in all, sizes checked against the directory. Zip64, encryption and multi-disk archives are refused. Failures read `mu: FILE: not a readable EPUB: <reason>`, exit 1.
+
+PDF goes through `pdftotext -layout -enc UTF-8 - -`, with no shell:
+- Pages split on form feeds, trailing blank lines dropped, printed through the data printer at the full terminal width, with a dim `page N` rule between pages and a `Page N` outline entry each.
+- Without `pdftotext` the error names poppler and how to install it, exit 1. A `pdftotext` failure reports its stderr.
+
 ## Format selection, first match wins
 
 1. `-f/--format <name>` flag
 2. For a URL, the response `Content-Type`. `text/plain` and `application/octet-stream` are skipped
 3. File extension (case-insensitive), or for a URL the extension of its path, never its host
-4. Content sniffing on the first 8 KB: used for stdin and for unknown or missing extensions. The order is formatted man output (overstrikes), a `#!` shebang (source code), Jupyter, JSON, man page, HTML, XML, Org, RST, AsciiDoc, TOML, YAML, then CSV/TSV, and each rule is conservative
-5. Fallback: Markdown, which shows plain text correctly too
+4. Magic bytes for the binary formats: `%PDF-` in the first 1 KB is PDF, and a zip whose first entry is `mimetype` holding `application/epub+zip` is EPUB
+5. Content sniffing on the first 8 KB: used for stdin and for unknown or missing extensions. The order is formatted man output (overstrikes), a `#!` shebang (source code), Jupyter, JSON, man page, HTML, XML, Org, RST, AsciiDoc, TOML, YAML, then CSV/TSV, and each rule is conservative
+6. Fallback: Markdown, which shows plain text correctly too
 
 `tests/sniff.rs` pins every fixture to its format. A sniffing change must keep it green.
 

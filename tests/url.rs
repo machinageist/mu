@@ -18,6 +18,9 @@ const HTML_BODY: &str = "<h1>Hello</h1><p>From the <b>server</b>.</p>";
 const JSON_BODY: &str = "{\"name\":\"mu\",\"tags\":[1,2]}";
 const MISSING_BODY: &str = "# Not here\n";
 const OUTLINE_BODY: &str = "# Guide\n\nIntro.\n\n## Install\n\n## Use\n";
+// The hand-written fixture PDF is plain ASCII, so it can be served as text
+const PDF_BODY: &str = include_str!("fixtures/sample.pdf");
+const PDF_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.pdf");
 
 // Answer a request path with (status line, content type, body)
 fn route(path: &str) -> (&'static str, &'static str, &'static str) {
@@ -25,6 +28,7 @@ fn route(path: &str) -> (&'static str, &'static str, &'static str) {
         "/page" => ("200 OK", "text/html; charset=utf-8", HTML_BODY),
         "/data" => ("200 OK", "application/json", JSON_BODY),
         "/guide" => ("200 OK", "text/markdown", OUTLINE_BODY),
+        "/paper" => ("200 OK", "application/pdf", PDF_BODY),
         "/old" => ("301 Moved Permanently", "text/plain", ""),
         _ => ("404 Not Found", "text/markdown", MISSING_BODY),
     }
@@ -179,4 +183,21 @@ fn toc_lists_the_headings_of_a_fetched_page() {
     let (code, out, _) = run(&["--toc", &url], "");
     assert_eq!(code, 0);
     assert_eq!(out, "Guide\n  Install\n  Use\n");
+}
+
+#[test]
+fn a_pdf_url_matches_the_file() {
+    if Command::new("pdftotext")
+        .arg("-v")
+        .stderr(Stdio::null())
+        .status()
+        .is_err()
+    {
+        eprintln!("skipped: pdftotext is not installed");
+        return;
+    }
+    let url = format!("{}/paper", serve());
+    let from_url = run(&[&url], "");
+    assert_eq!(from_url.0, 0, "{}", from_url.2);
+    assert_eq!(from_url, run(&[PDF_FIXTURE], ""));
 }

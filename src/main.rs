@@ -13,23 +13,24 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
 use mu::{
-    CellSize, Format, ImageMode, ImageOptions, Options, Protocol, Rendered, detect, outline,
-    present_outlined, sniff,
+    CellSize, Format, ImageMode, ImageOptions, Options, Protocol, Rendered, extract, outline,
+    present_outlined, sniff, sniff_bytes,
 };
 
 const USAGE: &str = "\
 Usage: mu [OPTIONS] [FILE | URL]
 
 Present Markdown, HTML, reStructuredText, Org, AsciiDoc, man pages, Jupyter notebooks,
-JSON, YAML, TOML, CSV, TSV, XML or source code in the terminal. Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL
+EPUB books, PDF (with poppler's pdftotext), JSON, YAML, TOML, CSV, TSV, XML or source code
+in the terminal. Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL
 with curl. The format comes from the file extension, else from the content, else
 Markdown; for a URL the response Content-Type is tried first.
 
 Options:
   -f, --format <NAME>  Force a format: markdown, html, rst, org, asciidoc, json, yaml, toml,
-                       csv, tsv, xml, man, ipynb, code (verbatim text, also: text)
+                       csv, tsv, xml, man, ipynb, epub, pdf, code (verbatim text, also: text)
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100 except
-                       for CSV and TSV tables)
+                       for CSV and TSV tables and PDF pages)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
       --images <MODE>  auto, fetch or never (default: auto, local files and data: URIs only;
@@ -198,11 +199,10 @@ impl Source {
 // Read a file or stdin, detecting its format
 fn load_file(args: &Args) -> Result<Source, String> {
     let file = args.path.as_deref().filter(|path| *path != STDIN_PATH);
-    let input = read_input(file).map_err(|error| {
-        let source = args.path.as_deref().unwrap_or(STDIN_PATH);
-        format!("{source}: {error}")
-    })?;
-    let format = args.format.unwrap_or_else(|| detect(file, &input));
+    let label = args.path.as_deref().unwrap_or(STDIN_PATH);
+    let bytes = read_input(file).map_err(|error| format!("{label}: {error}"))?;
+    let format = args.format.or_else(|| file.and_then(Format::from_path));
+    let (input, format) = decode(&bytes, format).map_err(|error| format!("{label}: {error}"))?;
     Ok(Source {
         parts: vec![(input, format)],
         title: file.unwrap_or(STDIN_TITLE).to_owned(),
@@ -234,15 +234,12 @@ fn load_url(args: &Args, url: &str) -> Result<Source, String> {
         parts.push((fetch::header_table(&response), Format::Markdown));
     }
     if !request.head {
-        let body = String::from_utf8(response.body.clone())
-            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
         // text/plain and other unknown types fall through to the path and the content
         let format = args
             .format
             .or_else(|| response.content_type().and_then(Format::from_media_type))
-            .or_else(|| Format::from_url_path(&response.final_url))
-            .unwrap_or_else(|| sniff(&body));
-        parts.push((body, format));
+            .or_else(|| Format::from_url_path(&response.final_url));
+        parts.push(decode(&response.body, format).map_err(|error| format!("{url}: {error}"))?);
     }
     Ok(Source {
         parts,
@@ -534,19 +531,25 @@ fn parse_when(value: &str) -> Option<When> {
     }
 }
 
-// Read the whole document from a file, or stdin when no path is given
-fn read_input(path: Option<&str>) -> io::Result<String> {
-    let bytes = match path {
-        Some(path) => fs::read(path)?,
+// Read the whole document's bytes from a file, or stdin when no path is given
+fn read_input(path: Option<&str>) -> io::Result<Vec<u8>> {
+    match path {
+        Some(path) => fs::read(path),
         None => {
             let mut bytes = Vec::new();
             io::stdin().lock().read_to_end(&mut bytes)?;
-            bytes
+            Ok(bytes)
         }
-    };
+    }
+}
+
+// Settle the format from what is known, then magic bytes, then the text, and convert the bytes
+fn decode(bytes: &[u8], known: Option<Format>) -> Result<(String, Format), String> {
+    let format = known.or_else(|| sniff_bytes(bytes));
     // Tolerate stray invalid bytes rather than refusing the file
-    Ok(String::from_utf8(bytes)
-        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()))
+    let text = extract(bytes, format.unwrap_or(Format::Markdown))?;
+    let format = format.unwrap_or_else(|| sniff(&text));
+    Ok((text, format))
 }
 
 // Choose the wrap width from the flag or the terminal

@@ -105,7 +105,7 @@ fn data_uri(rest: &str) -> Option<Vec<u8>> {
 }
 
 // Decode %XX escapes, leaving malformed ones as they are
-fn percent_decode(text: &str) -> Vec<u8> {
+pub(crate) fn percent_decode(text: &str) -> Vec<u8> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;

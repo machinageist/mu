@@ -64,7 +64,7 @@ use std::rc::Rc;
 pub(crate) mod base64;
 mod codec;
 mod encode;
-mod source;
+pub(crate) mod source;
 mod svg;
 
 // Decode limits so a hostile file cannot exhaust memory

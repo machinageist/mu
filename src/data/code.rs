@@ -1,7 +1,7 @@
 // Author: machinageist
 // Date: 2026-11-09
 // Description: Source files shown verbatim as plain lines, plus a shebang sniff
-// Notes: No highlighting yet; lexers arrive in 0.9.0 and will style these same lines
+// Notes: The plain lines used without color; `crate::highlight` styles the same lines
 
 use super::StyledLine;
 use crate::style::Style;

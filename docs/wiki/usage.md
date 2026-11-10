@@ -24,7 +24,7 @@ Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL.
 
 | Flag | Meaning | Default |
 |---|---|---|
-| `-f`, `--format <NAME>` | Force a format: `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man`, `ipynb`, `code`. The aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc`, `jupyter`, `notebook` and `text` work too, in any case. `code` shows the input verbatim. An unknown name is a usage error. | detected (see [Formats](/wiki/formats#selection)) |
+| `-f`, `--format <NAME>` | Force a format: `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man`, `ipynb`, `epub`, `pdf`, `code`. The aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc`, `jupyter`, `notebook` and `text` work too, in any case. `code` shows the input verbatim. An unknown name is a usage error. | detected (see [Formats](/wiki/formats#selection)) |
 | `--images <MODE>` | `auto`, `fetch` or `never`. `fetch` also downloads http(s) images. | `auto`, or `fetch` for a URL |
 | `--base <DIR\|URL>` | Resolve relative image paths here. | the input file's folder, or the final URL |
 | `--toc` | Print the document's outline and exit. See [Outline](#toc). |  |
@@ -40,7 +40,7 @@ The curl-like options (`-H -X -d -A -u -k -i -I --timeout --curl --no-rewrite`) 
 
 - `-w N` wins, with a minimum of 20.
 - Otherwise mu uses the terminal width, clamped to 20–100 columns so lines stay readable.
-- CSV and TSV tables are the exception: they use the full terminal width, with no 100-column cap. See [Tables](/wiki/formats#tables).
+- CSV and TSV tables and PDF pages are the exception: they use the full terminal width, with no 100-column cap. See [Tables](/wiki/formats#tables) and [PDF](/wiki/formats#pdf).
 - The width is probed on stdout, then stderr, then stdin, so `mu x.md | less -R` still sees the real width.
 - With no terminal attached at all, the width is 80.
 
@@ -79,7 +79,7 @@ The curl-like options (`-H -X -d -A -u -k -i -I --timeout --curl --no-rewrite`) 
 | Code | Meaning |
 |---|---|
 | `0` | Success, including a closed pipe such as `mu x.md \| head` |
-| `1` | Read or write error, fetch failure, or an HTTP status of 400 or more |
+| `1` | Read or write error, fetch failure, an HTTP status of 400 or more, an unreadable EPUB, or a PDF without `pdftotext` |
 | `2` | Usage error: unknown flag, bad value, a URL flag without a URL, or bare `mu` at a prompt |
 
 ## Recipes {#recipes}

@@ -24,6 +24,7 @@ What mu deliberately leaves out, what it doesn't do yet, and how fast it is.
 - YAML and TOML are colored, never reformatted. JSON nested deeper than 256 levels is colored as written rather than re-indented.
 - XML is re-indented only when its tags balance and no element mixes text with child elements; otherwise it's colored as written. Binary plists (`bplist00`) aren't decoded.
 - TSV has no quoting: every tab splits a field. CSV quoting follows RFC 4180.
+- EPUB: no CSS, fixed-layout or DRM-protected books, and an unpacked book folder must be zipped first. PDF: text only, with no pictures or bookmarks, and nothing at all without `pdftotext`.
 - Data formats, source code and tables have no headings, so the outline and `--toc` are empty for them.
 - Content detection reads the first 8 KB. Short or unusual inputs may be shown as Markdown; use `-f`.
 

@@ -1,6 +1,6 @@
 # mu
 
-**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, man pages, Jupyter notebooks, JSON, YAML, TOML, CSV, TSV and XML, and shows source code as written. It reads a file, stdin or a URL, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, syntax coloring for data, and box-drawn tables for CSV and TSV. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.4 MB binary with no config file.
+**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, man pages, Jupyter notebooks, EPUB books, PDF, JSON, YAML, TOML, CSV, TSV and XML, and shows source code as written. It reads a file, stdin or a URL, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, syntax coloring for data, and box-drawn tables for CSV and TSV. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.6 MB binary with no config file.
 
 ```sh
 mu README.md
@@ -24,7 +24,7 @@ cargo install --git https://github.com/machinageist/mu
 cargo install --path .
 ```
 
-Requires Rust 1.85+ (edition 2024). Linux and macOS (terminal width comes from the `TIOCGWINSZ` ioctl).
+Requires Rust 1.85+ (edition 2024). Linux and macOS (terminal width comes from the `TIOCGWINSZ` ioctl). Reading PDF needs `pdftotext` from poppler (`brew install poppler` or `apt install poppler-utils`); everything else is built in.
 
 ## Usage
 
@@ -116,6 +116,8 @@ The bottom row shows the file name, the visible line range, how far through you 
 | TSV | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields | table |
 | Man pages | `.1`–`.9` (and `.3p`, `.1ssl`…) `.man` `.mdoc` | a `.TH` or `.Dd` first request, after comments and macro definitions | document |
 | Jupyter notebook | `.ipynb` | a JSON object with `"cells"` and `"cell_type"` (checked before JSON) | document: prose, code, outputs and plots |
+| EPUB book | `.epub` | a zip whose first entry is `mimetype` holding `application/epub+zip` | document: chapters in reading order, with pictures |
+| PDF | `.pdf` | `%PDF-` in the first 1 KB | text laid out as on the page, a rule between pages; needs `pdftotext` |
 | Man output (`man ls \| mu`) | — | backspace overstrikes, checked first | text with bold and underline, as `man` laid it out |
 | Source code | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line (checked first) | text, verbatim, highlighted by language |
 
@@ -177,8 +179,9 @@ src/
   main.rs    CLI: args, input, width/color/paging decisions, single write
   pager/     built-in pager: raw mode, keys, scrolling, search, outline, resize, status bar
   term.rs    terminal size via TIOCGWINSZ
-  lib.rs     public API: render, present, present_outlined, outline, detect, sniff, Format, Options
+  lib.rs     public API: render, present, present_outlined, outline, detect, sniff, sniff_bytes, extract, Format, Options
   format/    Format enum, detection, dispatch; html, rst, org, asciidoc, man, csv → events; jupyter → Markdown
+  book/      binary formats: zip reader, EPUB → HTML, PDF → page text via pdftotext
   data/      styled-line printer; json, yaml, toml, xml highlighters
   image/     sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs  event walker: blocks, containers, lists, code frames
@@ -216,6 +219,10 @@ Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and c
 
 The user guide lives in `docs/wiki/`, one Markdown page per wiki page, and changes in the same commit as the feature it describes. `scripts/check-docs.sh` checks that before a release.
 
+**EPUB books** are read in-process: the spine gives the reading order, each chapter's body is shown through the HTML presenter, and the book's title and authors head the document. Pictures are taken from the book and drawn like any other image, links inside the book show as plain text, and chapter headings fill the outline. The zip is checked as it is read: at most 10,000 entries, 64 MB per entry and 256 MB in all, and Zip64 and encrypted books are refused.
+
+**PDF** goes through poppler's `pdftotext -layout`, so the text keeps the page's columns and spacing. A dim `page N` rule separates pages, each page is an outline entry, and wide pages use the full terminal width.
+
 ## Known limits
 
 - Syntax highlighting is lexical, from small built-in lexers: keywords, types, strings, numbers, comments and similar. There's no grammar, so heredocs, string interpolation and regex literals aren't picked out.
@@ -228,6 +235,7 @@ The user guide lives in `docs/wiki/`, one Markdown page per wiki page, and chang
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.
 - A table with too many columns to fit at 3 columns each (10 for CSV and TSV) overflows the width rather than becoming unreadable; the pager scrolls it sideways.
 - Binary plists (`bplist00`) are not decoded.
+- EPUB: no CSS, fixed-layout or DRM books, and an EPUB unpacked into a folder (as Apple Books stores them) must be zipped first. PDF: text only, no images or bookmarks, nothing at all without `pdftotext`, and scanned pages without a text layer come out empty.
 - Very deep nesting stops shrinking content below 16 columns and overflows instead.
 - Definition lists, math and wiki links are not enabled; they render as plain text.
 

@@ -5,7 +5,7 @@ order: 2
 summary: Every format mu reads, and how it picks one
 ---
 
-Seven document formats share one layout engine. Four data formats share one printer. Two table formats, CSV and TSV, go through the same table engine as Markdown tables. Source code is shown verbatim.
+Seven document formats share one layout engine. Four data formats share one printer. Two table formats, CSV and TSV, go through the same table engine as Markdown tables. Source code is shown verbatim. EPUB books and PDF are converted from their bytes first: a book becomes HTML, a PDF becomes page text.
 
 ## Supported formats {#supported}
 
@@ -18,6 +18,8 @@ Seven document formats share one layout engine. Four data formats share one prin
 | AsciiDoc | document | `.adoc` `.asciidoc` `.asc` | `= Title` first line, `:attr:` header lines, `[source,…]` blocks, `\|===` tables |
 | Man pages (roff) | document | `.1` to `.9`, also with letters (`.3p`, `.1ssl`), `.man` `.mdoc` | a `.TH` or `.Dd` request before any text |
 | Jupyter notebook | document | `.ipynb` | a JSON object with `"cells"` and `"cell_type"` |
+| EPUB book | document, built as HTML | `.epub` | a zip whose first entry is `mimetype` holding `application/epub+zip` |
+| PDF | page text, through `pdftotext` | `.pdf` | `%PDF-` in the first 1 KB |
 | JSON | data | `.json` `.jsonl` `.geojson` | starts with `{` or `[` and parses as JSON |
 | YAML | data | `.yaml` `.yml` | mostly `key: value` / `- item` lines with a top-level key or `---` |
 | TOML | data | `.toml` | mostly `[table]` and `key = value` lines |
@@ -26,17 +28,18 @@ Seven document formats share one layout engine. Four data formats share one prin
 | TSV | table | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields |
 | Source code | verbatim text | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line |
 
-XML, CSV and TSV were added in 0.6.0. Source code, man pages and Jupyter notebooks were added in 0.7.0.
+XML, CSV and TSV were added in 0.6.0. Source code, man pages and Jupyter notebooks were added in 0.7.0. EPUB and PDF arrive in 0.8.0.
 
 ## Format selection {#selection}
 
 The first rule that gives an answer wins:
 
-1. The `-f` / `--format <name>` flag. Names are `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man`, `ipynb` and `code`, plus the aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc`, `jupyter`, `notebook` and `text`.
+1. The `-f` / `--format <name>` flag. Names are `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml`, `man`, `ipynb`, `epub`, `pdf` and `code`, plus the aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist`, `roff`, `mdoc`, `jupyter`, `notebook` and `text`.
 2. For a URL, the response `Content-Type`. `text/plain` and `application/octet-stream` say nothing and are skipped. See [URLs](/wiki/urls#url-format).
 3. The file extension, case-insensitive. For a URL, the extension of its path, never its host.
-4. Content sniffing on the first 8 KB. This is used for stdin and for unknown or missing extensions such as `.txt`.
-5. Markdown, which also shows plain text correctly.
+4. Magic bytes for the binary formats: `%PDF-` in the first 1 KB is PDF, and a zip that starts with a `mimetype` entry holding `application/epub+zip` is EPUB.
+5. Content sniffing on the first 8 KB. This is used for stdin and for unknown or missing extensions such as `.txt`.
+6. Markdown, which also shows plain text correctly.
 
 > [!NOTE]
 > An `.svg` file is XML, so `mu logo.svg` shows its source, highlighted. An SVG is drawn as a picture only when a document embeds it. See [Images](/wiki/images).
@@ -160,6 +163,27 @@ A notebook (`.ipynb`, nbformat 4) reads as one document, top to bottom:
 - Plots and other PNG, JPEG or SVG outputs go through the [image pipeline](/wiki/images), so they draw as pictures, or show as `[image: output]` with `--images never`.
 - HTML-only output, such as a pandas table with no text version, is shown as its HTML source.
 - Other notebook versions, and files that aren't valid notebooks, are shown as JSON.
+
+## EPUB books {#epub}
+
+A book (`.epub`) reads as one document, in the order its spine gives:
+
+- The book's title is the first heading, and its authors follow in italics.
+- Each chapter's body goes through the [HTML presenter](#documents), so headings, lists, tables, quotes and code look as they do for HTML. Chapter headings fill the [outline](/wiki/pager#outline).
+- Pictures are taken from the book and drawn like any other [image](/wiki/images), or show their alt text with `--images never`. A picture missing from the book shows its alt text. Cover pages built from an SVG `<image>` are drawn too.
+- Links to other places in the book show as plain text. Links that leave the book (`http`, `https`, `mailto`) print their URL as usual.
+- The zip is read with limits: at most 10,000 entries, 64 MB per entry and 256 MB in all. Zip64, encrypted and multi-disk archives are refused. A broken book fails with `mu: FILE: not a readable EPUB: <reason>` and exit code 1.
+
+Apple Books keeps books as unpacked folders. Zip one first, `mimetype` first and stored: `cd Book.epub && zip -X0 ../book.epub mimetype && zip -Xr ../book.epub . -x mimetype`.
+
+## PDF {#pdf}
+
+mu has no PDF parser of its own. It runs poppler's `pdftotext -layout`, sending the PDF on stdin, so the text keeps the page's columns and spacing:
+
+- Pages are printed as written, with long lines hard-wrapped behind the `┆` bar. Like tables, PDF uses the full terminal width rather than the 100-column cap.
+- A dim `page N` rule separates pages, and each page is an outline entry, `Page N`.
+- Without `pdftotext`, mu fails with a message naming the package: `brew install poppler` or `apt install poppler-utils`. A PDF `pdftotext` can't read reports its error.
+- Pages are text only: no pictures, and scanned pages with no text layer come out empty.
 
 ## Tables {#tables}
 

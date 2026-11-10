@@ -14,6 +14,7 @@ mod rst;
 
 use std::path::Path;
 
+use crate::book;
 use crate::data;
 use crate::highlight;
 use crate::render::{Options, Rendered, render_events, render_markdown, render_table_events};
@@ -37,10 +38,12 @@ pub enum Format {
     Code,
     Man,
     Jupyter,
+    Epub,
+    Pdf,
 }
 
 // Names accepted by --format, first one is canonical
-const NAMES: [(Format, &[&str]); 14] = [
+const NAMES: [(Format, &[&str]); 16] = [
     (Format::Markdown, &["markdown", "md"]),
     (Format::Html, &["html", "htm"]),
     (Format::Rst, &["rst", "restructuredtext"]),
@@ -55,10 +58,12 @@ const NAMES: [(Format, &[&str]); 14] = [
     (Format::Code, &["code", "text"]),
     (Format::Man, &["man", "roff", "mdoc"]),
     (Format::Jupyter, &["ipynb", "jupyter", "notebook"]),
+    (Format::Epub, &["epub"]),
+    (Format::Pdf, &["pdf"]),
 ];
 
 // File extensions, matched case-insensitively
-const EXTENSIONS: [(Format, &[&str]); 14] = [
+const EXTENSIONS: [(Format, &[&str]); 16] = [
     (Format::Markdown, &["md", "markdown", "mdown", "mkd"]),
     (Format::Html, &["html", "htm", "xhtml"]),
     (Format::Rst, &["rst", "rest"]),
@@ -171,10 +176,12 @@ const EXTENSIONS: [(Format, &[&str]); 14] = [
     ),
     (Format::Man, &["man", "mdoc"]),
     (Format::Jupyter, &["ipynb"]),
+    (Format::Epub, &["epub"]),
+    (Format::Pdf, &["pdf"]),
 ];
 
 // Media types from a Content-Type header, matched without parameters, case-insensitively
-const MEDIA_TYPES: [(Format, &[&str]); 14] = [
+const MEDIA_TYPES: [(Format, &[&str]); 16] = [
     (Format::Markdown, &["text/markdown", "text/x-markdown"]),
     (Format::Html, &["text/html", "application/xhtml+xml"]),
     (Format::Rst, &["text/x-rst", "text/prs.fallenstein.rst"]),
@@ -228,6 +235,8 @@ const MEDIA_TYPES: [(Format, &[&str]); 14] = [
     ),
     (Format::Man, &["text/troff", "application/x-troff-man"]),
     (Format::Jupyter, &["application/x-ipynb+json"]),
+    (Format::Epub, &["application/epub+zip"]),
+    (Format::Pdf, &["application/pdf"]),
 ];
 
 // Structured-syntax suffix for JSON media types such as application/problem+json
@@ -287,9 +296,14 @@ impl Format {
         Format::from_path(path)
     }
 
-    // Tables that use the full terminal width rather than the reading-width cap
+    // Tables and PDF pages use the full terminal width rather than the reading-width cap
     pub fn is_wide(self) -> bool {
-        matches!(self, Format::Csv | Format::Tsv)
+        matches!(self, Format::Csv | Format::Tsv | Format::Pdf)
+    }
+
+    // Formats read from bytes and converted with `extract` before presenting
+    pub fn is_binary(self) -> bool {
+        matches!(self, Format::Epub | Format::Pdf)
     }
 
     // Canonical name, as shown in help and errors
@@ -377,7 +391,8 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
     };
     match format {
         Format::Markdown => render_markdown(input, options),
-        Format::Html => render_events(html::events(input), options, input.len()),
+        Format::Html | Format::Epub => render_events(html::events(input), options, input.len()),
+        Format::Pdf => book::pdf::present(input, options),
         Format::Rst => render_events(rst::events(input), options, input.len()),
         Format::Org => render_events(org::events(input), options, input.len()),
         Format::AsciiDoc => render_events(asciidoc::events(input), options, input.len()),
