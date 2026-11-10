@@ -30,10 +30,11 @@ pub enum Format {
     Toml,
     Csv,
     Tsv,
+    Xml,
 }
 
 // Names accepted by --format, first one is canonical
-const NAMES: [(Format, &[&str]); 10] = [
+const NAMES: [(Format, &[&str]); 11] = [
     (Format::Markdown, &["markdown", "md"]),
     (Format::Html, &["html", "htm"]),
     (Format::Rst, &["rst", "restructuredtext"]),
@@ -44,10 +45,11 @@ const NAMES: [(Format, &[&str]); 10] = [
     (Format::Toml, &["toml"]),
     (Format::Csv, &["csv"]),
     (Format::Tsv, &["tsv"]),
+    (Format::Xml, &["xml", "plist"]),
 ];
 
 // File extensions, matched case-insensitively
-const EXTENSIONS: [(Format, &[&str]); 10] = [
+const EXTENSIONS: [(Format, &[&str]); 11] = [
     (Format::Markdown, &["md", "markdown", "mdown", "mkd"]),
     (Format::Html, &["html", "htm", "xhtml"]),
     (Format::Rst, &["rst", "rest"]),
@@ -58,10 +60,16 @@ const EXTENSIONS: [(Format, &[&str]); 10] = [
     (Format::Toml, &["toml"]),
     (Format::Csv, &["csv"]),
     (Format::Tsv, &["tsv", "tab"]),
+    (
+        Format::Xml,
+        &[
+            "xml", "plist", "xsd", "xsl", "xslt", "rss", "atom", "svg", "opml",
+        ],
+    ),
 ];
 
 // Media types from a Content-Type header, matched without parameters, case-insensitively
-const MEDIA_TYPES: [(Format, &[&str]); 10] = [
+const MEDIA_TYPES: [(Format, &[&str]); 11] = [
     (Format::Markdown, &["text/markdown", "text/x-markdown"]),
     (Format::Html, &["text/html", "application/xhtml+xml"]),
     (Format::Rst, &["text/x-rst", "text/prs.fallenstein.rst"]),
@@ -87,10 +95,13 @@ const MEDIA_TYPES: [(Format, &[&str]); 10] = [
     (Format::Toml, &["application/toml", "text/x-toml"]),
     (Format::Csv, &["text/csv"]),
     (Format::Tsv, &["text/tab-separated-values"]),
+    (Format::Xml, &["application/xml", "text/xml"]),
 ];
 
 // Structured-syntax suffix for JSON media types such as application/problem+json
 const JSON_SUFFIX: &str = "+json";
+// Structured-syntax suffix for XML types such as image/svg+xml; xhtml is matched as HTML first
+const XML_SUFFIX: &str = "+xml";
 const URL_SCHEME_SEPARATOR: &str = "://";
 const URL_PATH_START: char = '/';
 const URL_PATH_ENDS: [char; 2] = ['?', '#'];
@@ -127,6 +138,7 @@ impl Format {
             .find(|(_, types)| types.contains(&essence.as_str()))
             .map(|(format, _)| *format)
             .or_else(|| essence.ends_with(JSON_SUFFIX).then_some(Format::Json))
+            .or_else(|| essence.ends_with(XML_SUFFIX).then_some(Format::Xml))
     }
 
     // Look up the extension of a URL's path, ignoring the host, query and fragment
@@ -171,6 +183,8 @@ pub fn sniff(input: &str) -> Format {
         Format::Json
     } else if html::sniff(head) {
         Format::Html
+    } else if data::xml::sniff(head) {
+        Format::Xml
     } else if org::sniff(head) {
         Format::Org
     } else if rst::sniff(head) {
@@ -207,6 +221,7 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
         Format::Json => no_headings(data::print(&data::json::highlight(input), options)),
         Format::Yaml => no_headings(data::print(&data::yaml::highlight(input), options)),
         Format::Toml => no_headings(data::print(&data::toml::highlight(input), options)),
+        Format::Xml => no_headings(data::print(&data::xml::highlight(input), options)),
         Format::Csv | Format::Tsv => render_table_events(
             csv::events(input, format),
             options,

@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<rss version="2.0">
+<channel>
+    <title>mu releases</title>
+    <link>https://github.com/machinageist/mu</link>
+    <!-- newest first -->
+    <item><title>mu 0.6.0</title><description><![CDATA[CSV & XML <b>support</b>]]></description>
+      <pubDate>Mon, 09 Nov 2026 00:00:00 GMT</pubDate></item>
+    <item><title>Tables &amp; trees</title></item>
+</channel>
+</rss>
