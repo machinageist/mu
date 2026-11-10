@@ -9,6 +9,9 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 - Pager outline: `o` lists the document's headings, starting on the section being read; `Enter` jumps to one and `o`, `q` or `Esc` closes the list. Works for every document format
 - `--toc` prints a document's outline (its headings, indented by level) and exits. Works for files, stdin and URLs; data formats print nothing
 
+### Fixed
+- On macOS, resizing the window while paging re-renders at once; it used to wait for the next key press
+
 ## 0.4.0 - 2026-11-09
 
 ### Added

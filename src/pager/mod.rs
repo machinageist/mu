@@ -593,24 +593,34 @@ extern "C" fn on_resize(_signal: libc::c_int) {
 }
 
 // Block until a key arrives or the window is resized
+// Notes: select(), not poll(): macOS poll() rejects /dev/tty with POLLNVAL straight away, which
+// once made a resize wait for the next key because the loop sat in a blocking read
 fn wait_for_input(tty: RawFd, wake: RawFd) -> io::Result<(bool, bool)> {
-    let mut fds = [
-        libc::pollfd {
-            fd: tty,
-            events: libc::POLLIN,
-            revents: 0,
-        },
-        libc::pollfd {
-            fd: wake,
-            events: libc::POLLIN,
-            revents: 0,
-        },
-    ];
+    let highest = tty.max(wake);
+    // FD_SETSIZE's integer type differs by platform, so compare both as u64
+    if u64::try_from(highest).map_or(true, |fd| fd >= libc::FD_SETSIZE as u64) {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    }
     loop {
-        // SAFETY: fds is a live array of two pollfd structs for the whole call
-        let status = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+        // SAFETY: an all-zero fd_set is a valid empty set, FD_SET only touches descriptors
+        // checked above to be under FD_SETSIZE, and the set outlives the select() call
+        let (status, ready) = unsafe {
+            let mut ready: libc::fd_set = std::mem::zeroed();
+            libc::FD_ZERO(&mut ready);
+            libc::FD_SET(tty, &mut ready);
+            libc::FD_SET(wake, &mut ready);
+            let status = libc::select(
+                highest + 1,
+                &mut ready,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            (status, ready)
+        };
         if status >= 0 {
-            return Ok((fds[0].revents != 0, fds[1].revents & libc::POLLIN != 0));
+            // SAFETY: `ready` is the set select() just filled, and both descriptors are in range
+            return Ok(unsafe { (libc::FD_ISSET(tty, &ready), libc::FD_ISSET(wake, &ready)) });
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
