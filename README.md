@@ -211,6 +211,8 @@ cargo run --release -- -w 60 tests/fixtures/kitchen-sink.md
 
 Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and commit rules are in `CONTRIBUTING.md`.
 
+The user guide lives in `docs/wiki/`, one Markdown page per wiki page, and changes in the same commit as the feature it describes. `scripts/check-docs.sh` checks that before a release.
+
 ## Known limits
 
 - No syntax highlighting in code blocks (deliberate: it would cost startup time and binary size). Whole JSON, YAML and TOML files are colored; code blocks inside documents are not.
