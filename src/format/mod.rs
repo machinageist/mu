@@ -12,7 +12,7 @@ mod rst;
 use std::path::Path;
 
 use crate::data;
-use crate::render::{Options, render, render_events};
+use crate::render::{Options, Rendered, render_events, render_markdown};
 
 // Sniffing looks only at the head of the input, cut back to a char boundary
 const SNIFF_BYTES: usize = 8 * 1024;
@@ -174,15 +174,24 @@ pub fn sniff(input: &str) -> Format {
 
 // Render input in the given format
 pub fn present(input: &str, format: Format, options: &Options) -> String {
+    present_outlined(input, format, options).text
+}
+
+// Render input in the given format, keeping the document's headings; data formats have none
+pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rendered {
+    let no_headings = |text: String| Rendered {
+        text,
+        headings: Vec::new(),
+    };
     match format {
-        Format::Markdown => render(input, options),
+        Format::Markdown => render_markdown(input, options),
         Format::Html => render_events(html::events(input), options, input.len()),
         Format::Rst => render_events(rst::events(input), options, input.len()),
         Format::Org => render_events(org::events(input), options, input.len()),
         Format::AsciiDoc => render_events(asciidoc::events(input), options, input.len()),
-        Format::Json => data::print(&data::json::highlight(input), options),
-        Format::Yaml => data::print(&data::yaml::highlight(input), options),
-        Format::Toml => data::print(&data::toml::highlight(input), options),
+        Format::Json => no_headings(data::print(&data::json::highlight(input), options)),
+        Format::Yaml => no_headings(data::print(&data::yaml::highlight(input), options)),
+        Format::Toml => no_headings(data::print(&data::toml::highlight(input), options)),
     }
 }
 

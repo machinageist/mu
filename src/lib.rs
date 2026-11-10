@@ -11,6 +11,6 @@ mod render;
 mod style;
 mod table;
 
-pub use format::{Format, detect, present, sniff};
+pub use format::{Format, detect, present, present_outlined, sniff};
 pub use image::{CellSize, ImageMode, ImageOptions, Protocol};
-pub use render::{Options, render};
+pub use render::{Heading, Options, Rendered, render};

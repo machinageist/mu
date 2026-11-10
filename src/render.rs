@@ -115,9 +115,28 @@ struct Raw {
     text: String,
 }
 
+// A heading as written to the output: its level (1-6), plain text, and first output line
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Heading {
+    pub level: u8,
+    pub text: String,
+    pub line: usize,
+}
+
+// Rendered output plus the headings found in it, for outlines and jumping
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rendered {
+    pub text: String,
+    pub headings: Vec<Heading>,
+}
+
 struct Renderer<'o> {
     options: &'o Options,
     out: String,
+    headings: Vec<Heading>,
+    // Newlines in `out` up to `counted_bytes`, so each heading's line costs only the new text
+    counted_bytes: usize,
+    counted_lines: usize,
     inline: Inline,
     inline_open: bool,
     containers: Vec<Container>,
@@ -142,6 +161,11 @@ struct ImageSpan {
 
 // Render a Markdown document into terminal-ready text
 pub fn render(input: &str, options: &Options) -> String {
+    render_markdown(input, options).text
+}
+
+// Render a Markdown document, keeping its headings
+pub(crate) fn render_markdown(input: &str, options: &Options) -> Rendered {
     render_events(
         Parser::new_ext(input, parse_options(input)),
         options,
@@ -154,7 +178,7 @@ pub(crate) fn render_events<'a>(
     events: impl IntoIterator<Item = Event<'a>>,
     options: &Options,
     capacity: usize,
-) -> String {
+) -> Rendered {
     let mut renderer = Renderer::new(options, capacity);
     for event in events {
         renderer.event(event);
@@ -254,6 +278,9 @@ impl<'o> Renderer<'o> {
         Renderer {
             options,
             out: String::with_capacity(capacity * 2),
+            headings: Vec::new(),
+            counted_bytes: 0,
+            counted_lines: 0,
             inline: Inline::default(),
             inline_open: false,
             containers: Vec::new(),
@@ -269,9 +296,22 @@ impl<'o> Renderer<'o> {
     }
 
     // Flush whatever is still buffered and hand back the output
-    fn finish(mut self) -> String {
+    fn finish(mut self) -> Rendered {
         self.flush_inline();
-        self.out
+        Rendered {
+            text: self.out,
+            headings: self.headings,
+        }
+    }
+
+    // Index of the line the next write starts on
+    fn current_line(&mut self) -> usize {
+        self.counted_lines += self.out.as_bytes()[self.counted_bytes..]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count();
+        self.counted_bytes = self.out.len();
+        self.counted_lines
     }
 
     // Dispatch one parser event
@@ -676,6 +716,24 @@ impl<'o> Renderer<'o> {
             self.inline.base,
             self.options.color,
         );
+        // The same wrap without color gives the heading's plain text
+        let text = wrap(
+            &self.inline.atoms,
+            &self.inline.arena,
+            self.avail(),
+            self.inline.base,
+            false,
+        )
+        .iter()
+        .map(|line| line.text.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+        let line = self.current_line();
+        self.headings.push(Heading {
+            level: u8::try_from(self.heading + 1).unwrap_or(u8::MAX),
+            text,
+            line,
+        });
         self.emit_lines(&lines);
         if let Some(glyph) = HEADING_RULES.get(self.heading) {
             let widest = lines.iter().map(|line| line.width).max().unwrap_or(0);
