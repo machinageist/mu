@@ -2,7 +2,7 @@
 title: Read docs and data without leaving the terminal
 group: Guide
 order: 0
-summary: mu is the markup/markdown utility. It reads a file, stdin or a URL, works out the format, and prints styled, wrapped output for Markdown, HTML, reStructuredText, Org, AsciiDoc, JSON, YAML, TOML, XML, CSV and TSV.
+summary: mu is the markup/markdown utility. It reads a file, stdin or a URL, works out the format, and prints styled, wrapped output for Markdown, HTML, reStructuredText, Org, AsciiDoc, man pages, Jupyter notebooks, JSON, YAML, TOML, XML, CSV and TSV, and shows source code as written.
 ---
 
 ```term notes.md — mu
@@ -35,7 +35,7 @@ See <b>the docs</b> <d>(https://github.com/machinageist/mu)</d>.
 - **Images** standing alone in a document are drawn in the terminal with an exact aspect ratio.
 - **A pager is built in.** Documents taller than the screen open in it automatically. It searches with `/` and `?`, lists headings with `o`, and scrolls wide tables sideways with `h` and `l`.
 - **Outlines.** `mu --toc FILE` prints a document's headings, indented by level.
-- **It's small.** A single ~2.2 MB binary with no config file. A typical README renders in about 2 ms over process start.
+- **It's small.** A single ~2.4 MB binary with no config file. A typical README renders in about 2 ms over process start.
 - **Untrusted input is safe to view.** Control characters from the document never reach your terminal.
 
 ## Install {#install}

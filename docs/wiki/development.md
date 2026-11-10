@@ -52,7 +52,7 @@ AGENTS/changes/<id>/SPEC.md          desired outcome, acceptance criteria
 AGENTS/changes/<id>/PLAN.md          atomic tasks and verification
 ```
 
-Past changes: `multi-format` (0.2.0), `images` (0.3.0), `url-input` (0.4.0), `pager-navigation` (0.5.0) and `data-inputs` (0.6.0). The agreed order of releases up to 1.0 is in `FEATURE/ROADMAP.md`. When behaviour ships, `FEATURE_SPEC.md` is updated so it always describes the current state.
+Past changes: `multi-format` (0.2.0), `images` (0.3.0), `url-input` (0.4.0), `pager-navigation` (0.5.0), `data-inputs` (0.6.0) and `document-inputs` (0.7.0). The agreed order of releases up to 1.0 is in `FEATURE/ROADMAP.md`. When behaviour ships, `FEATURE_SPEC.md` is updated so it always describes the current state.
 
 ## Commits {#commits}
 

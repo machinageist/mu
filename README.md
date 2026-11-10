@@ -1,6 +1,6 @@
 # mu
 
-**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, JSON, YAML, TOML, CSV, TSV and XML. It reads a file, stdin or a URL, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, syntax coloring for data, and box-drawn tables for CSV and TSV. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.2 MB binary with no config file.
+**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, man pages, Jupyter notebooks, JSON, YAML, TOML, CSV, TSV and XML, and shows source code as written. It reads a file, stdin or a URL, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, syntax coloring for data, and box-drawn tables for CSV and TSV. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.4 MB binary with no config file.
 
 ```sh
 mu README.md

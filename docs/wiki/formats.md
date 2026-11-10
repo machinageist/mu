@@ -26,7 +26,7 @@ Seven document formats share one layout engine. Four data formats share one prin
 | TSV | table | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields |
 | Source code | verbatim text | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line |
 
-XML, CSV and TSV were added in 0.6.0. Source code, man pages and Jupyter notebooks are listed under Unreleased in the changelog and ship in the next release.
+XML, CSV and TSV were added in 0.6.0. Source code, man pages and Jupyter notebooks were added in 0.7.0.
 
 ## Format selection {#selection}
 

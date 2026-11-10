@@ -79,7 +79,7 @@ src/
 
 Everything else is hand-written: the HTML, RST, Org and AsciiDoc parsers, the CSV and TSV reader, the JSON, YAML, TOML and XML tokenizers, image fitting and resampling, the half-block, Kitty and iTerm2 encoders, base64, and the pager with its search. There's no HTTP or TLS code; URLs go through the system `curl`.
 
-The release profile uses `opt-level = 3`, fat LTO, one codegen unit and `strip`, giving a ~2.2 MB binary. It keeps `panic = "unwind"` on purpose, so a panic inside a third-party image decoder can be caught and shown as alt text.
+The release profile uses `opt-level = 3`, fat LTO, one codegen unit and `strip`, giving a ~2.4 MB binary. It keeps `panic = "unwind"` on purpose, so a panic inside a third-party image decoder can be caught and shown as alt text.
 
 ## Library API {#library-api}
 
