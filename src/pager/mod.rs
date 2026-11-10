@@ -24,7 +24,7 @@ use crate::term::{self, Size};
 
 use keys::{Action, CTRL_C, CTRL_U, Key, normal_action, parse_keys};
 use outline::Outline;
-use search::{Direction, Hit, Search, highlight};
+use search::{Direction, Hit, Search, highlight, strip_sgr};
 
 const TTY_PATH: &str = "/dev/tty";
 
@@ -46,6 +46,10 @@ const OUTLINE_TITLE: &str = "outline";
 const OUTLINE_HINT: &str = "Enter jump  o close";
 const NO_HEADINGS: &str = "no headings";
 const SELECTED_STYLE: &str = "\x1b[7m";
+const COLUMN_PREFIX: &str = "col ";
+// A search jump that scrolls sideways leaves the match this far into the window
+const MATCH_LEAD_DIVISOR: usize = 4;
+const SGR_INTRODUCER: &str = "\x1b[";
 const PROMPT_CURSOR: char = '█';
 const NOT_FOUND_PREFIX: &str = "not found: ";
 const WRAPPED_NOTE: &str = " wrapped";
@@ -120,6 +124,8 @@ impl View {
 struct Document {
     text: String,
     starts: Vec<usize>,
+    // Display width of the widest line, for the sideways scroll limit
+    widest: usize,
 }
 
 impl Document {
@@ -134,7 +140,17 @@ impl Document {
                 starts.push(index + 1);
             }
         }
-        Document { text, starts }
+        let mut document = Document {
+            text,
+            starts,
+            widest: 0,
+        };
+        document.widest = (0..document.len())
+            .filter_map(|index| document.line(index))
+            .map(|line| strip_sgr(line).width())
+            .max()
+            .unwrap_or(0);
+        document
     }
 
     // Count the lines
@@ -160,6 +176,9 @@ struct Pager {
     document: Document,
     headings: Vec<Heading>,
     view: View,
+    // Window width, and how many columns are scrolled off to the left
+    columns: usize,
+    left: usize,
     outline: Option<Outline>,
     // The open search prompt: its direction and what has been typed
     prompt: Option<(Direction, String)>,
@@ -184,6 +203,8 @@ impl Pager {
             document,
             headings: rendered.headings,
             view,
+            columns: FALLBACK_SIZE.columns,
+            left: 0,
             outline: None,
             prompt: None,
             search: None,
@@ -222,6 +243,7 @@ impl Pager {
                     self.outline = None;
                     if let Some(line) = line {
                         self.view.top = line.min(self.view.max_top());
+                        self.left = 0;
                     }
                 }
                 Key::Char('o' | 'q' | 'Q') | Key::Esc | Key::Ctrl(CTRL_C) => self.outline = None,
@@ -246,6 +268,13 @@ impl Pager {
             Some(Action::NextMatch) => self.step(false),
             Some(Action::PrevMatch) => self.step(true),
             Some(Action::ClearSearch) => self.search = None,
+            Some(Action::ScrollRight) => {
+                let step = (self.columns / 2).max(1);
+                self.left = (self.left + step).min(self.max_left());
+            }
+            Some(Action::ScrollLeft) => {
+                self.left = self.left.saturating_sub((self.columns / 2).max(1));
+            }
             Some(action) => self.view.apply(action),
             None => {}
         }
@@ -298,6 +327,25 @@ impl Pager {
     fn jump(&mut self, hit: Hit) {
         self.wrapped = hit.wrapped;
         self.view.show(hit.line);
+        let Some(found) = self.search.as_ref().and_then(Search::current_match) else {
+            return;
+        };
+        let Some(line) = self.document.line(found.line) else {
+            return;
+        };
+        let shown = strip_sgr(line);
+        let width_of = |chars: usize| shown.chars().take(chars).collect::<String>().width();
+        let (start, end) = (width_of(found.start), width_of(found.end));
+        if start < self.left || end > self.left + self.columns {
+            self.left = start
+                .saturating_sub(self.columns / MATCH_LEAD_DIVISOR)
+                .min(self.max_left());
+        }
+    }
+
+    // Furthest the view can scroll right: the widest line's end at the window's right edge
+    fn max_left(&self) -> usize {
+        self.document.widest.saturating_sub(self.columns)
     }
 
     // Take a re-rendered document, or just a new height, keeping the place and the search
@@ -311,6 +359,7 @@ impl Pager {
             }
         }
         self.view.resize(self.document.len(), rows);
+        self.left = self.left.min(self.max_left());
         let top = self.view.top;
         if let Some(search) = &mut self.search {
             search.first_from(top, Direction::Forward);
@@ -336,10 +385,11 @@ impl Pager {
         for row in 0..self.view.rows {
             let index = self.view.top + row;
             if let Some(line) = self.document.line(index) {
-                match &self.search {
-                    Some(search) => frame.push_str(&highlight(line, &search.on_line(index))),
-                    None => frame.push_str(line),
-                }
+                let shown = match &self.search {
+                    Some(search) => highlight(line, &search.on_line(index)),
+                    None => line.to_owned(),
+                };
+                frame.push_str(&cut_left(&shown, self.left));
             }
             frame.push_str(CLEAR_TO_EOL);
             frame.push_str(ROW_END);
@@ -397,7 +447,12 @@ impl Pager {
                 search.count()
             )
         });
-        let place = format!("{first}-{last}/{} {percent}%", view.total);
+        let column = if self.left > 0 {
+            format!("{COLUMN_PREFIX}{}  ", self.left + 1)
+        } else {
+            String::new()
+        };
+        let place = format!("{column}{first}-{last}/{} {percent}%", view.total);
         let mut right = format!("{found}{place}  {STATUS_HINT} ");
         if right.width() + 2 > columns {
             right = format!("{found}{place} ");
@@ -407,6 +462,34 @@ impl Pager {
         let left = fit_left(left, columns.saturating_sub(right.width() + 2));
         bar(&left, &right, columns)
     }
+}
+
+// Drop the first `left` display columns of a styled line, keeping every SGR so colors stay right
+// Notes: a wide character cut in half becomes spaces for its visible half
+fn cut_left(line: &str, left: usize) -> String {
+    if left == 0 {
+        return line.to_owned();
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut column = 0;
+    let mut rest = line;
+    while let Some(ch) = rest.chars().next() {
+        if rest.starts_with(SGR_INTRODUCER) {
+            let end = rest.find('m').map_or(rest.len(), |at| at + 1);
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            continue;
+        }
+        let width = ch.width().unwrap_or(0);
+        if column >= left {
+            out.push(ch);
+        } else if column + width > left {
+            out.push_str(&" ".repeat(column + width - left));
+        }
+        column += width;
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
 }
 
 // The key that starts a search in this direction
@@ -460,6 +543,7 @@ impl Session {
         let resize = ResizeSignal::install()?;
         let mut size = self.size();
         let mut pager = Pager::new(title, rendered, body_rows(size));
+        pager.columns = size.columns;
         let mut frame = String::new();
         let mut keys = [0; KEY_BUFFER_SIZE];
         let mut clear = false;
@@ -473,6 +557,7 @@ impl Session {
             if resized {
                 resize.drain();
                 size = self.size();
+                pager.columns = size.columns;
                 pager.relayout(relayout(size.columns), body_rows(size));
                 clear = true;
             }
@@ -1008,6 +1093,92 @@ mod tests {
         );
         feed(&mut state, b"\r");
         assert_eq!(state.view.top, 0);
+    }
+
+    // A pager 80 columns wide over a short line, a 200-column line, and a match at column 150
+    fn wide(rows: usize) -> Pager {
+        let long = format!("{}needle{}", "x".repeat(150), "y".repeat(44));
+        let text = format!("short\n{long}\nlast\n");
+        let mut state = Pager::new(
+            "wide.csv",
+            Rendered {
+                text,
+                headings: vec![Heading {
+                    level: 1,
+                    text: "Top".to_owned(),
+                    line: 0,
+                }],
+            },
+            rows,
+        );
+        state.columns = 80;
+        state
+    }
+
+    #[test]
+    fn cutting_keeps_styles_and_splits_wide_characters() {
+        assert_eq!(cut_left("\x1b[1mabc\x1b[0mdef", 2), "\x1b[1mc\x1b[0mdef");
+        assert_eq!(cut_left("\x1b[1mabc\x1b[0mdef", 0), "\x1b[1mabc\x1b[0mdef");
+        assert_eq!(cut_left("全角x", 1), " 角x");
+        assert_eq!(cut_left("全角x", 4), "x");
+        assert_eq!(cut_left("\x1b[33mab\x1b[0m", 10), "\x1b[33m\x1b[0m");
+        let line = "\x1b[34mone \x1b[1mtwo\x1b[0m three";
+        for left in 0..16 {
+            let expected: String = strip_sgr(line).chars().skip(left).collect();
+            assert_eq!(strip_sgr(&cut_left(line, left)), expected, "{left}");
+        }
+    }
+
+    #[test]
+    fn sideways_scrolling_stops_at_the_widest_line() {
+        let mut state = wide(10);
+        assert_eq!(state.document.widest, 200);
+        feed(&mut state, b"l");
+        assert_eq!(state.left, 40);
+        assert!(
+            status(&state, 80).contains("col 41  1-3/3"),
+            "{}",
+            status(&state, 80)
+        );
+        feed(&mut state, b"\x1b[C\x1b[Cl");
+        assert_eq!(state.left, 120);
+        feed(&mut state, b"h");
+        assert_eq!(state.left, 80);
+        feed(&mut state, b"\x1b[D\x1b[D\x1b[D");
+        assert_eq!(state.left, 0);
+        assert!(!status(&state, 80).contains("col "));
+    }
+
+    #[test]
+    fn narrow_documents_do_not_scroll_sideways() {
+        let mut state = pager(10, &[], 5);
+        state.columns = 80;
+        feed(&mut state, b"ll");
+        assert_eq!(state.left, 0);
+    }
+
+    #[test]
+    fn a_search_scrolls_sideways_to_its_match() {
+        let mut state = wide(10);
+        feed(&mut state, b"/needle\r");
+        assert_eq!(state.left, 120);
+        let mut frame = String::new();
+        state.draw(&mut frame, 80, false);
+        assert!(frame.contains("\x1b[1;7mneedle"), "{frame:?}");
+        feed(&mut state, b"\x1b");
+        assert_eq!(state.left, 120, "Esc keeps the column");
+    }
+
+    #[test]
+    fn outline_jumps_and_resizes_reset_or_clamp_the_column() {
+        let mut state = wide(10);
+        feed(&mut state, b"lll");
+        feed(&mut state, b"o\r");
+        assert_eq!(state.left, 0);
+        feed(&mut state, b"lll");
+        state.columns = 190;
+        state.relayout(None, 10);
+        assert_eq!(state.left, 10);
     }
 
     #[test]

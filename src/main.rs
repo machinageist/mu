@@ -59,6 +59,7 @@ Pager keys:
   d u                   scroll half a page   g G  Home End        jump to top or bottom
   / ?                   search forward, back n N                  next, previous match
   o                     outline of headings  Esc                  clear search highlight
+  h l  Left Right       scroll sideways (wide tables)
   q  Ctrl-C             quit";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

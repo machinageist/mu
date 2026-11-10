@@ -104,6 +104,11 @@ impl Search {
         self.matches.len()
     }
 
+    // The current match, for scrolling it into view sideways
+    pub(super) fn current_match(&self) -> Option<Match> {
+        self.matches.get(self.current?).copied()
+    }
+
     // 1-based position of the current match, for the status bar
     pub(super) fn position(&self) -> Option<usize> {
         self.current.map(|index| index + 1)

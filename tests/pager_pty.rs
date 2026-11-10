@@ -32,6 +32,11 @@ struct Pty {
 impl Pty {
     // Start mu paging the fixture in a pty of the given size
     fn spawn(rows: u16, columns: u16) -> Pty {
+        Pty::spawn_file(FIXTURE, rows, columns)
+    }
+
+    // Start mu paging a file in a pty of the given size
+    fn spawn_file(path: &str, rows: u16, columns: u16) -> Pty {
         let (mut master, mut slave) = (0, 0);
         // SAFETY: openpty writes two new descriptors; name, termios and winsize may be null
         let status = unsafe {
@@ -54,7 +59,7 @@ impl Pty {
         let stdio = |fd: &OwnedFd| Stdio::from(fd.try_clone().expect("clone slave"));
         let mut command = Command::new(BIN);
         command
-            .args(["--paging", "always", FIXTURE])
+            .args(["--paging", "always", path])
             .env("TERM", "xterm-256color")
             .env_remove("NO_COLOR")
             .stdin(stdio(&slave))
@@ -170,6 +175,34 @@ fn search_outline_and_quit_in_a_real_terminal() {
     pty.wait_for("Enter jump");
     pty.send(b"G\r");
     pty.wait_for("100%");
+    pty.send(b"q");
+    assert_eq!(pty.exit_code(), Some(0));
+}
+
+#[test]
+fn a_wide_csv_scrolls_sideways() {
+    let header: Vec<String> = (1..=12)
+        .map(|column| format!("column_{column:02}"))
+        .collect();
+    let row: Vec<String> = (1..=12)
+        .map(|column| format!("value-{column:02}-abcdef"))
+        .collect();
+    let csv = format!(
+        "{}\n{}\n{}\n",
+        header.join(","),
+        row.join(","),
+        row.join(",")
+    );
+    let path = format!("{}/wide.csv", env!("CARGO_TARGET_TMPDIR"));
+    std::fs::write(&path, csv).expect("write wide csv");
+
+    let mut pty = Pty::spawn_file(&path, 24, 80);
+    // Cells wrap at the 10-column minimum and the table overflows the 80-column window
+    pty.wait_for("wide.csv 1-8/8");
+    pty.send(b"l");
+    pty.wait_for("wide.csv col 41  1-8/8");
+    pty.send(b"\x1b[D");
+    pty.wait_for("wide.csv 1-8/8");
     pty.send(b"q");
     assert_eq!(pty.exit_code(), Some(0));
 }

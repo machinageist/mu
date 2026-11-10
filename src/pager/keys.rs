@@ -31,6 +31,8 @@ pub(super) enum Action {
     PrevMatch,
     ClearSearch,
     Outline,
+    ScrollLeft,
+    ScrollRight,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +100,8 @@ fn escape_action(params: &[u8], final_byte: u8) -> Option<Action> {
     match (final_byte, params) {
         (b'A', _) => Some(Action::LineUp),
         (b'B', _) => Some(Action::LineDown),
+        (b'C', _) => Some(Action::ScrollRight),
+        (b'D', _) => Some(Action::ScrollLeft),
         (b'H', _) | (b'~', b"1" | b"7") => Some(Action::Top),
         (b'F', _) | (b'~', b"4" | b"8") => Some(Action::Bottom),
         (b'~', b"5") => Some(Action::PageUp),
@@ -123,6 +127,8 @@ pub(super) fn normal_action(key: Key) -> Option<Action> {
         Key::Char('n') => Some(Action::NextMatch),
         Key::Char('N') => Some(Action::PrevMatch),
         Key::Char('o') => Some(Action::Outline),
+        Key::Char('h') => Some(Action::ScrollLeft),
+        Key::Char('l') => Some(Action::ScrollRight),
         Key::Esc => Some(Action::ClearSearch),
         Key::Nav(action) => Some(action),
         _ => None,
@@ -176,6 +182,10 @@ mod tests {
             [
                 LineUp, LineDown, PageUp, PageDown, Top, Bottom, Top, Bottom, LineUp
             ]
+        );
+        assert_eq!(
+            actions(b"\x1b[C\x1b[Dhl"),
+            [ScrollRight, ScrollLeft, ScrollLeft, ScrollRight]
         );
     }
 

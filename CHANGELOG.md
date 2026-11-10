@@ -5,6 +5,7 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 ## Unreleased
 
 ### Added
+- Pager: `h`/`l` and `←`/`→` scroll sideways by half a window when lines are wider than the screen, such as wide tables. The status bar shows `col N` while scrolled, and a search scrolls sideways to reach its match
 - XML (including plist, SVG source, RSS and Atom) is highlighted, and re-indented two spaces per level when tags balance and no element mixes text with child elements; anything else is shown as written. Recognised by `.xml`, `.plist`, `.svg`, `.rss`, `.atom` and similar, `application/xml`, `text/xml` and `+xml` media types, `-f xml`/`plist`, and an `<?xml` declaration or well-known root in piped input
 - CSV and TSV are shown as box-drawn tables: the first row is the header, numeric columns are right-aligned, quoting follows RFC 4180, and a CSV's delimiter (`,` `;` tab `|`) is detected. Tables use the full terminal width, and columns stop shrinking at 10 so wide tables overflow rather than crush. Recognised by `.csv`, `.tsv`, `.tab`, `text/csv`, `text/tab-separated-values`, `-f csv`/`tsv`, and in piped input
 
