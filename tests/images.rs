@@ -17,8 +17,6 @@ const WIDTH: usize = 60;
 // Options with images on, half-block output, and a chosen cell geometry
 fn with_images(width: usize, cell: CellSize, max_rows: Option<usize>) -> Options {
     Options {
-        width,
-        color: true,
         images: ImageOptions {
             mode: ImageMode::Auto,
             base: Some(FIXTURE_DIR.to_owned()),
@@ -26,6 +24,7 @@ fn with_images(width: usize, cell: CellSize, max_rows: Option<usize>) -> Options
             protocol: Protocol::HalfBlock,
             max_rows,
         },
+        ..Options::new(width, true)
     }
 }
 

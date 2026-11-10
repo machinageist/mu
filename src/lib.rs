@@ -5,6 +5,7 @@
 
 mod data;
 mod format;
+mod highlight;
 mod image;
 mod inline;
 mod outline;

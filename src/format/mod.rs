@@ -15,6 +15,7 @@ mod rst;
 use std::path::Path;
 
 use crate::data;
+use crate::highlight;
 use crate::render::{Options, Rendered, render_events, render_markdown, render_table_events};
 
 // Sniffing looks only at the head of the input, cut back to a char boundary
@@ -310,6 +311,15 @@ fn is_man_section(ext: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_lowercase())
 }
 
+// The extensions shown as source code, each of which has a highlighter
+#[cfg(test)]
+pub(crate) fn code_extensions() -> &'static [&'static str] {
+    EXTENSIONS
+        .iter()
+        .find(|(format, _)| *format == Format::Code)
+        .map_or(&[], |(_, extensions)| extensions)
+}
+
 // Pick a format from the path's extension, else from the content, else Markdown
 pub fn detect(path: Option<&str>, input: &str) -> Format {
     path.and_then(Format::from_path)
@@ -381,13 +391,29 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
         Format::Yaml => no_headings(data::print(&data::yaml::highlight(input), options)),
         Format::Toml => no_headings(data::print(&data::toml::highlight(input), options)),
         Format::Xml => no_headings(data::print(&data::xml::highlight(input), options)),
-        Format::Code => no_headings(data::print(&data::code::lines(input), options)),
+        Format::Code => no_headings(data::print(&code_lines(input, options), options)),
         Format::Csv | Format::Tsv => render_table_events(
             csv::events(input, format),
             options,
             input.len(),
             csv::CSV_MIN_COLUMN,
         ),
+    }
+}
+
+// Source lines, highlighted when color is on and the language is known
+fn code_lines(input: &str, options: &Options) -> Vec<data::StyledLine> {
+    let language = options
+        .language
+        .as_deref()
+        .and_then(highlight::language)
+        .or_else(|| highlight::language_from_shebang(input));
+    match language.filter(|_| options.color) {
+        Some(language) => highlight::highlight(
+            input.trim_start_matches(data::code::BYTE_ORDER_MARK),
+            language,
+        ),
+        None => data::code::lines(input),
     }
 }
 

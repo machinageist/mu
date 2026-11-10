@@ -11,7 +11,7 @@ What mu deliberately leaves out, what it doesn't do yet, and how fast it is.
 
 ### Rendering {#limits-rendering}
 
-- No syntax highlighting in code blocks. This is deliberate, because it would cost startup time and binary size. Whole JSON, YAML, TOML and XML files are colored; code blocks inside documents aren't, and neither are source files, which are shown verbatim.
+- Syntax highlighting is lexical, from small built-in lexers, with no grammar: heredocs, string interpolation and regex literals aren't picked out, and a name's role is guessed from its spelling. Code blocks and source files in an unknown language stay plain.
 - Links aren't clickable (no OSC 8 hyperlinks). The URL is printed instead.
 - Definition lists, math and wiki links aren't enabled in Markdown; they render as plain text.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.

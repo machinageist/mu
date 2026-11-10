@@ -63,9 +63,26 @@ Real output of `mu -w 52` on a short document. Note the `┆` where the long cod
 - **Tables**: columns shrink widest-first and cells wrap. A table with too many columns to fit at 3 columns each overflows the width rather than becoming unreadable.
 - **CSV and TSV tables** use the same engine, but take the full terminal width and stop shrinking columns at 10. A wider table overflows, and the pager [scrolls it sideways](/wiki/pager#sideways). See [Tables](/wiki/formats#tables).
 - **Wide glyphs**: CJK and emoji are measured by display width (`unicode-width`), not byte or char count.
-- **Code blocks**: no syntax highlighting, on purpose, because it would cost startup time and binary size.
+- **Code blocks**: highlighted by the language in the info string, as below. A block in an unknown language stays plain.
 - **Headings** are recorded with their level, text and first output line, for the pager's [outline](/wiki/pager#outline) and `--toc`.
 - **Links**: the URL is printed after the text. Links are not clickable, since mu doesn't emit OSC 8 hyperlinks.
+
+## Syntax highlighting {#highlighting}
+
+Source files and fenced code blocks are highlighted when color is on. Keywords, types, function calls, strings, numbers, constants, comments, and meta such as `#include`, `@decorators` and `#[attributes]` each get a style. Highlighting only changes styles, so with color off the output is exactly what it was without it.
+
+- **Languages**:
+  - C, C++, Objective-C and C#
+  - Rust, Go, Zig, Nim and assembly
+  - Python, Ruby, Perl, PHP, Lua, R and Julia
+  - JavaScript, TypeScript and CSS/SCSS/Sass/Less
+  - Java, Kotlin, Scala and Groovy/Gradle
+  - F#, Haskell, OCaml, Elixir, Erlang, the Lisps, Dart and Swift
+  - sh/bash/zsh, fish, PowerShell and batch
+  - SQL, Vim script, Make, CMake, Dockerfile, protobuf, GraphQL, HCL/Terraform and Nix
+  - diffs, INI-style config, and JSON, YAML, TOML and XML/HTML, which use the data highlighters but are never re-indented inside a code block
+- **Names**: a code block's info string or a file's extension, in any case, with common aliases such as `py`, `js`, `bash`, `console`, `c++` and `golang`. A script with no extension is matched by its `#!` interpreter.
+- **How**: one table-driven lexer reads each language's comment markers, quotes, keywords and a few flags, so the whole set costs about 66 KB of binary and almost no time. There's no grammar, so it can't tell a type from a variable by context.
 
 ## Theme {#theme}
 

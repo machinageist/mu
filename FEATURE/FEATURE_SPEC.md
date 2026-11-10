@@ -34,7 +34,7 @@ A terminal presenter that turns markup and data into readable, styled, wrapped t
 | Formatted man output (`man ls \| mu`) | text, overstrikes as bold and underline | sniffed only |
 | Source code | verbatim text | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.go` `.sh` and about 80 more; `-f code` or `-f text` for anything |
 
-Document formats share one layout engine. Each one gets the same headings, lists, quotes, tables, code frames, links and pager. Data formats are syntax-highlighted. Source code is shown line for line as written, with no Markdown interpretation, and long lines hard-wrap like data. Valid JSON is also re-indented, and XML is re-indented when its tags balance and no element mixes text with child elements.
+Document formats share one layout engine. Each one gets the same headings, lists, quotes, tables, code frames, links and pager. Data formats are syntax-highlighted. Source code is shown line for line as written, with no Markdown interpretation, and long lines hard-wrap like data. Source files and fenced code blocks are syntax-highlighted by language when color is on (extension, `#!` line or info string); highlighting only changes styles, so color output with styling removed equals plain output Valid JSON is also re-indented, and XML is re-indented when its tags balance and no element mixes text with child elements.
 
 Tables (CSV and TSV) go through the same table engine as Markdown tables:
 - The first record is the header, and numeric columns are right-aligned.

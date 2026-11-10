@@ -147,3 +147,17 @@ pub const STYLE_DATA_COMMENT: Style = Style::new(ATTR_DIM | ATTR_ITALIC, FG_DEFA
 pub const STYLE_DATA_PUNCT: Style = Style::new(ATTR_DIM, FG_DEFAULT);
 pub const STYLE_DATA_SECTION: Style = Style::new(ATTR_BOLD, FG_CYAN);
 pub const STYLE_DATA_META: Style = Style::new(0, FG_CYAN);
+
+// Theme: source code
+pub const STYLE_CODE_KEYWORD: Style = Style::new(ATTR_BOLD, FG_MAGENTA);
+pub const STYLE_CODE_TYPE: Style = Style::new(0, FG_CYAN);
+pub const STYLE_CODE_FUNCTION: Style = Style::new(0, FG_BLUE);
+pub const STYLE_CODE_STRING: Style = Style::new(0, FG_GREEN);
+pub const STYLE_CODE_NUMBER: Style = Style::new(0, FG_YELLOW);
+pub const STYLE_CODE_CONSTANT: Style = Style::new(ATTR_BOLD, FG_YELLOW);
+pub const STYLE_CODE_COMMENT: Style = Style::new(ATTR_DIM | ATTR_ITALIC, FG_DEFAULT);
+pub const STYLE_CODE_META: Style = Style::new(0, FG_BRIGHT_CYAN);
+pub const STYLE_CODE_VARIABLE: Style = Style::new(ATTR_ITALIC, FG_RED);
+pub const STYLE_CODE_INSERTED: Style = Style::new(0, FG_BRIGHT_GREEN);
+pub const STYLE_CODE_DELETED: Style = Style::new(0, FG_RED);
+pub const STYLE_CODE_HEADER: Style = Style::new(ATTR_BOLD, FG_DEFAULT);

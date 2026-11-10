@@ -96,6 +96,11 @@ pub fn highlight(input: &str) -> Vec<StyledLine> {
     }
 }
 
+// Classify JSON text into styled lines exactly as written, as code blocks need
+pub fn highlight_verbatim(input: &str) -> Vec<StyledLine> {
+    input.lines().map(highlight_line).collect()
+}
+
 // Walk the input as a stream of JSON values, reporting events and stopping at the first problem
 fn parse<'a>(
     input: &'a str,

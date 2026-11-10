@@ -9,6 +9,8 @@ use pulldown_cmark::{
 };
 use unicode_width::UnicodeWidthChar;
 
+use crate::data::Span;
+use crate::highlight;
 use crate::image::{self, ImageMode, ImageOptions};
 use crate::inline::{Atom, CONTROL_REPLACEMENT, Inline, Line, push_clean, text_width, wrap};
 use crate::style::{
@@ -70,6 +72,8 @@ pub struct Options {
     pub width: usize,
     pub color: bool,
     pub images: ImageOptions,
+    // Language for source files, as an extension or name such as `rs` or `python`
+    pub language: Option<String>,
 }
 
 impl Options {
@@ -79,6 +83,7 @@ impl Options {
             width,
             color,
             images: ImageOptions::default(),
+            language: None,
         }
     }
 }
@@ -290,6 +295,58 @@ fn verbatim_chunks(line: &str, limit: usize, chunks: &mut Vec<String>) {
     }
     let last = chunker.chunk;
     chunks.push(last);
+}
+
+// Cuts one highlighted line into styled pieces that fit the frame
+struct StyledChunker {
+    chunks: Vec<Vec<Span>>,
+    width: usize,
+    column: usize,
+    limit: usize,
+}
+
+impl StyledChunker {
+    // Append one glyph in a style, starting a new chunk when the current one is full
+    fn push(&mut self, glyph: char, width: usize, style: Style) {
+        if self.width + width > self.limit && self.width > 0 {
+            self.chunks.push(Vec::new());
+            self.width = 0;
+        }
+        if let Some(chunk) = self.chunks.last_mut() {
+            match chunk.last_mut() {
+                Some((last, text)) if *last == style => text.push(glyph),
+                _ => chunk.push((style, glyph.to_string())),
+            }
+        }
+        self.width += width;
+        self.column += width;
+    }
+}
+
+// Split one highlighted line into chunks no wider than `limit`, with the same tab, control
+// and wrapping rules as plain verbatim lines, so styling never moves a character
+fn styled_chunks(line: &[Span], limit: usize) -> Vec<Vec<Span>> {
+    let mut chunker = StyledChunker {
+        chunks: vec![Vec::new()],
+        width: 0,
+        column: 0,
+        limit,
+    };
+    for (style, text) in line {
+        for ch in text.chars() {
+            match ch {
+                '\r' => {}
+                '\t' => {
+                    for _ in 0..TAB_STOP - chunker.column % TAB_STOP {
+                        chunker.push(' ', 1, *style);
+                    }
+                }
+                _ if ch.is_control() => chunker.push(CONTROL_REPLACEMENT, 1, *style),
+                _ => chunker.push(ch, ch.width().unwrap_or(0), *style),
+            }
+        }
+    }
+    chunker.chunks
 }
 
 impl<'o> Renderer<'o> {
@@ -821,6 +878,32 @@ impl<'o> Renderer<'o> {
         );
         self.out.push('\n');
 
+        // Highlighted body, when color is on and the language is known
+        let language = match &raw.kind {
+            RawKind::Code(lang) if color => highlight::language(lang),
+            _ => None,
+        };
+        if let Some(language) = language {
+            let limit = width.saturating_sub(FRAME_EDGE_WIDTH).max(1);
+            for line in highlight::highlight(&raw.text, language) {
+                for (index, chunk) in styled_chunks(&line, limit).into_iter().enumerate() {
+                    let bar = if index == 0 {
+                        FRAME_BAR
+                    } else {
+                        FRAME_WRAP_BAR
+                    };
+                    self.line_prefix();
+                    paint(&mut self.out, bar, STYLE_FRAME, color);
+                    for (style, text) in chunk {
+                        paint(&mut self.out, &text, style, color);
+                    }
+                    self.out.push('\n');
+                }
+            }
+            self.frame_bottom(width);
+            return;
+        }
+
         // Body, hard-wrapped with a dashed bar marking continuations
         let mut chunks = Vec::new();
         for line in raw.text.lines() {
@@ -842,7 +925,12 @@ impl<'o> Renderer<'o> {
             }
         }
 
-        // Bottom edge
+        self.frame_bottom(width);
+    }
+
+    // Close a code frame with its bottom edge
+    fn frame_bottom(&mut self, width: usize) {
+        let color = self.options.color;
         self.line_prefix();
         paint(&mut self.out, FRAME_BOTTOM, STYLE_FRAME, color);
         paint_repeat(

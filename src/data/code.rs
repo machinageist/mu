@@ -8,7 +8,7 @@ use crate::style::Style;
 
 // A script's interpreter line
 const SHEBANG: &str = "#!";
-const BYTE_ORDER_MARK: char = '\u{feff}';
+pub(crate) const BYTE_ORDER_MARK: char = '\u{feff}';
 
 // True when the input starts with a shebang line
 pub fn sniff(head: &str) -> bool {

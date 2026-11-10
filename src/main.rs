@@ -121,6 +121,8 @@ struct Source {
     images: ImageMode,
     // Set for an HTTP error status, reported after the body is shown
     failure: Option<String>,
+    // The file or URL's extension, naming the language of source code
+    language: Option<String>,
 }
 
 enum Command {
@@ -174,6 +176,18 @@ fn main() -> ExitCode {
     }
 }
 
+// Characters that end a URL's path
+const URL_PATH_ENDS: [char; 2] = ['?', '#'];
+
+// The extension of a path or URL path, if it has one
+fn extension(path: &str) -> Option<String> {
+    let name = path.rsplit('/').next()?;
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_owned)
+}
+
 impl Source {
     // Whether any part is a table that should use the full terminal width
     fn is_wide(&self) -> bool {
@@ -196,6 +210,7 @@ fn load_file(args: &Args) -> Result<Source, String> {
         base: args.base.clone().or_else(|| file.map(str::to_owned)),
         images: args.images.unwrap_or(ImageMode::Auto),
         failure: None,
+        language: file.and_then(extension),
     })
 }
 
@@ -237,6 +252,13 @@ fn load_url(args: &Args, url: &str) -> Result<Source, String> {
         failure: response
             .is_error()
             .then(|| format!("{url}: HTTP {}", response.status)),
+        language: extension(
+            response
+                .final_url
+                .split(URL_PATH_ENDS)
+                .next()
+                .unwrap_or_default(),
+        ),
     })
 }
 
@@ -267,6 +289,7 @@ fn present_all(source: &Source, options: &Options) -> Rendered {
 fn show(args: &Args, source: &Source) -> ExitCode {
     let options = Options {
         images: resolve_images(source.images, source.base.clone()),
+        language: source.language.clone(),
         ..Options::new(
             resolve_width(args.width, source.is_wide()),
             resolve_color(&args.color),

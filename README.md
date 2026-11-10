@@ -117,7 +117,7 @@ The bottom row shows the file name, the visible line range, how far through you 
 | Man pages | `.1`–`.9` (and `.3p`, `.1ssl`…) `.man` `.mdoc` | a `.TH` or `.Dd` first request, after comments and macro definitions | document |
 | Jupyter notebook | `.ipynb` | a JSON object with `"cells"` and `"cell_type"` (checked before JSON) | document: prose, code, outputs and plots |
 | Man output (`man ls \| mu`) | — | backspace overstrikes, checked first | text with bold and underline, as `man` laid it out |
-| Source code | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line (checked first) | text, verbatim |
+| Source code | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line (checked first) | text, verbatim, highlighted by language |
 
 Detection from content is deliberately conservative: when in doubt it picks Markdown, which shows plain text correctly too. Use `-f` when it guesses wrong.
 
@@ -218,7 +218,7 @@ The user guide lives in `docs/wiki/`, one Markdown page per wiki page, and chang
 
 ## Known limits
 
-- No syntax highlighting in code blocks (deliberate: it would cost startup time and binary size). Whole JSON, YAML and TOML files are colored; code blocks inside documents are not.
+- Syntax highlighting is lexical, from small built-in lexers: keywords, types, strings, numbers, comments and similar. There's no grammar, so heredocs, string interpolation and regex literals aren't picked out.
 - Non-Markdown parsers cover the subset real READMEs and pages use, not the full specs: no table cell spans (HTML, RST, AsciiDoc), no RST line blocks or letter/roman enumerators, no AsciiDoc footnotes, one header row per Org table.
 - YAML and TOML are colored, never reformatted. JSON nested deeper than 256 levels is colored as written rather than re-indented.
 - Content detection reads the first 8 KB. Short or unusual inputs may be shown as Markdown; use `-f`.

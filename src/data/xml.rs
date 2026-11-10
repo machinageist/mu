@@ -101,6 +101,15 @@ pub fn highlight(input: &str) -> Vec<StyledLine> {
     lines.finish()
 }
 
+// Classify XML into styled lines exactly as written, as code blocks need
+pub fn highlight_verbatim(input: &str) -> Vec<StyledLine> {
+    let mut lines = Lines::default();
+    for token in &tokenize(input) {
+        lines.token(token);
+    }
+    lines.finish()
+}
+
 // Split XML into tokens that together are exactly the input
 fn tokenize(input: &str) -> Vec<Token<'_>> {
     let mut tokens = Vec::new();
