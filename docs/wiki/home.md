@@ -30,6 +30,7 @@ See <b>the docs</b> <d>(https://github.com/machinageist/mu)</d>.
 - **Documents** in Markdown, HTML, reStructuredText, Org and AsciiDoc get headings, lists, quotes, tables, framed code blocks and links, all from one shared layout engine.
 - **Data** in JSON, YAML, TOML and XML gets token coloring. Valid JSON is re-indented as well, and so is XML whose structure allows it, including plists, SVG source and RSS or Atom feeds.
 - **Tables** in CSV and TSV are drawn with box borders, a header row and right-aligned numbers. A CSV's delimiter is detected.
+- **Source code** is shown verbatim, line for line, rather than read as Markdown.
 - **URLs** are fetched with the system `curl` and presented like files. GitHub, GitLab and Gist page URLs become their raw files.
 - **Images** standing alone in a document are drawn in the terminal with an exact aspect ratio.
 - **A pager is built in.** Documents taller than the screen open in it automatically. It searches with `/` and `?`, lists headings with `o`, and scrolls wide tables sideways with `h` and `l`.

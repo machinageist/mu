@@ -62,6 +62,7 @@ mu -H 'Accept: application/json' -X POST -d '{"q":1}' https://httpbin.org/post
 | XML | `application/xml` `text/xml`, and any other type ending in `+xml`, such as `image/svg+xml` or `application/rss+xml` |
 | CSV | `text/csv` |
 | TSV | `text/tab-separated-values` |
+| Source code | `text/x-c` `text/x-csrc` `text/x-chdr` `text/x-c++src` `text/x-c++hdr` `text/x-python` `text/x-rust` `text/x-go` `text/x-java` `text/x-java-source` `text/javascript` `application/javascript` `application/x-javascript` `text/x-sh` `application/x-sh` `text/x-shellscript` `text/x-diff` `text/x-patch` `text/css` `application/sql` |
 
 `--toc` works for URLs too: `mu --toc https://example.com/` prints the page's headings.
 

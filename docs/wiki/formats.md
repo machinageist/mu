@@ -2,10 +2,10 @@
 title: Formats
 group: Guide
 order: 2
-summary: The eleven formats and how mu picks one
+summary: Every format mu reads, and how it picks one
 ---
 
-Five document formats share one layout engine. Four data formats share one printer. Two table formats, CSV and TSV, go through the same table engine as Markdown tables.
+Five document formats share one layout engine. Four data formats share one printer. Two table formats, CSV and TSV, go through the same table engine as Markdown tables. Source code is shown verbatim.
 
 ## Supported formats {#supported}
 
@@ -22,14 +22,15 @@ Five document formats share one layout engine. Four data formats share one print
 | XML | data | `.xml` `.plist` `.svg` `.rss` `.atom` `.xsd` `.xsl` `.xslt` `.opml` | an `<?xml` declaration, a non-HTML `<!DOCTYPE`, or a well-known root element |
 | CSV | table | `.csv` | 3+ lines with the same number of `,` or `;` fields |
 | TSV | table | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields |
+| Source code | verbatim text | `.c` `.h` `.cpp` `.rs` `.py` `.js` `.ts` `.go` `.java` `.sh` `.sql` `.diff` and about 70 more | a `#!` first line |
 
-XML, CSV and TSV were added in 0.6.0.
+XML, CSV and TSV were added in 0.6.0. Source code is listed under Unreleased in the changelog and ships in the next release.
 
 ## Format selection {#selection}
 
 The first rule that gives an answer wins:
 
-1. The `-f` / `--format <name>` flag. Names are `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv` and `xml`, plus the aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml` and `plist`.
+1. The `-f` / `--format <name>` flag. Names are `markdown`, `html`, `rst`, `org`, `asciidoc`, `json`, `yaml`, `toml`, `csv`, `tsv`, `xml` and `code`, plus the aliases `md`, `htm`, `restructuredtext`, `adoc`, `yml`, `plist` and `text`.
 2. For a URL, the response `Content-Type`. `text/plain` and `application/octet-stream` say nothing and are skipped. See [URLs](/wiki/urls#url-format).
 3. The file extension, case-insensitive. For a URL, the extension of its path, never its host.
 4. Content sniffing on the first 8 KB. This is used for stdin and for unknown or missing extensions such as `.txt`.
@@ -44,15 +45,16 @@ Sniffing runs the rules below in a fixed order, most specific first. Every rule 
 
 | # | Format | Rule |
 |---|---|---|
-| 1 | JSON | Starts with `{` or `[` and tokenizes as JSON so far |
-| 2 | HTML | A doctype, `html`, `head` or `body` tag comes first |
-| 3 | XML | An `<?xml` declaration with no `<html` after it, a `<!DOCTYPE` that isn't HTML, or a first element named `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` |
-| 4 | Org | `#+KEYWORD` or `#+BEGIN_` line, a `PROPERTIES` drawer, or a star heading plus a described or URL link |
-| 5 | RST | `.. directive::` or `.. _target:` line, an over-and-underlined title after a blank line, or link/role syntax with no Markdown headings or fences |
-| 6 | AsciiDoc | `= Title` first line, `:attr:` header, source block attribute plus delimiter, or a table fence |
-| 7 | TOML | 2+ lines, 80% are tables or `key = value`, and at least one `key = value` |
-| 8 | YAML | 3+ lines, 80% YAML-shaped, a key, a top-level key or `---` or item mapping, and no fences, quotes or tables |
-| 9 | TSV, then CSV | See [below](#table-sniffing) |
+| 1 | Source code | The input starts with `#!`, like a script |
+| 2 | JSON | Starts with `{` or `[` and tokenizes as JSON so far |
+| 3 | HTML | A doctype, `html`, `head` or `body` tag comes first |
+| 4 | XML | An `<?xml` declaration with no `<html` after it, a `<!DOCTYPE` that isn't HTML, or a first element named `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` |
+| 5 | Org | `#+KEYWORD` or `#+BEGIN_` line, a `PROPERTIES` drawer, or a star heading plus a described or URL link |
+| 6 | RST | `.. directive::` or `.. _target:` line, an over-and-underlined title after a blank line, or link/role syntax with no Markdown headings or fences |
+| 7 | AsciiDoc | `= Title` first line, `:attr:` header, source block attribute plus delimiter, or a table fence |
+| 8 | TOML | 2+ lines, 80% are tables or `key = value`, and at least one `key = value` |
+| 9 | YAML | 3+ lines, 80% YAML-shaped, a key, a top-level key or `---` or item mapping, and no fences, quotes or tables |
+| 10 | TSV, then CSV | See [below](#table-sniffing) |
 | — | Markdown | Everything else |
 
 > [!TIP]
@@ -115,6 +117,15 @@ An element that holds only text stays on one line, and whitespace between a tag'
 ```
 
 That's the output for a plist that arrived on one line. Binary plists (`bplist00`) aren't decoded.
+
+## Source code {#code}
+
+Source files are shown line for line as written. Without this, a `.c` or `.py` file would fall back to Markdown, which joins lines and reads `*` and `_` as emphasis.
+
+- Over 80 extensions are recognised: the C family, Rust, Go, Python, Ruby, JavaScript and TypeScript, CSS, JVM and .NET languages, shell scripts, SQL, diffs, and config such as `.ini` and `.conf`.
+- A piped script that starts with `#!` is recognised by that line.
+- `-f code`, or `-f text`, shows any input this way.
+- There's no syntax highlighting yet. Long lines hard-wrap behind a `┆` bar, like data.
 
 ## Tables {#tables}
 
