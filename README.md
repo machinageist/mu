@@ -1,6 +1,6 @@
 # mu
 
-**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, JSON, YAML and TOML. It reads a file, stdin or a URL, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, and syntax coloring for data. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.0 MB binary with no config file.
+**mu** is the *markup/markdown utility*: a small, fast terminal presenter for Markdown, HTML, reStructuredText, Org-mode, AsciiDoc, JSON, YAML, TOML, CSV, TSV and XML. It reads a file, stdin or a URL, works out the format, wraps text to the terminal width, and prints styled output: headings, lists, quotes, tables, framed code blocks and links for documents, syntax coloring for data, and box-drawn tables for CSV and TSV. Documents taller than the screen open in a built-in pager. Pictures in documents are drawn in the terminal. It is a single ~2.2 MB binary with no config file.
 
 ```sh
 mu README.md
@@ -90,6 +90,7 @@ Built in, no `less` needed. It takes over the screen (alternate screen, so your 
 | `n` / `N` | Next / previous match, wrapping round the ends |
 | `Esc` | Clear search highlighting |
 | `o` | Outline: the document's headings. `j` `k` and the scroll keys move, `Enter` jumps there, `o` `q` `Esc` close |
+| `h` `←` / `l` `→` | Scroll sideways by half a window, for lines wider than the screen such as wide tables |
 | `q` `Ctrl-C` | Quit |
 
 **Search** matches the text as it appears on screen, with styling removed. It is a literal match, not a regular expression, and a lowercase query ignores case while any capital letter makes it case-sensitive. Every visible match is shown in reverse video, and the current one is also bold. The status bar shows the query, the match number and count (`3/17`), and `wrapped` when a jump went round the end. A match never spans two lines.
@@ -110,12 +111,19 @@ The bottom row shows the file name, the visible line range, how far through you 
 | JSON | `.json` `.jsonl` `.geojson` | starts with `{` or `[` and parses as JSON | data, re-indented when valid |
 | YAML | `.yaml` `.yml` | mostly `key: value` / `- item` lines with a top-level key or `---` | data |
 | TOML | `.toml` | mostly `[table]` and `key = value` lines | data |
+| XML | `.xml` `.plist` `.svg` `.rss` `.atom` `.xsd` `.xsl` `.xslt` `.opml` | an `<?xml` declaration, a non-HTML `<!DOCTYPE`, or a `plist`, `svg`, `rss`, `feed`, `urlset`, `sitemapindex`, `project` or `opml` root | data, re-indented when safe |
+| CSV | `.csv` | 3+ lines with the same number of `,` or `;` fields (checked last, so prose stays Markdown) | table |
+| TSV | `.tsv` `.tab` | 3+ lines with the same number of tab-separated fields | table |
 
 Detection from content is deliberately conservative: when in doubt it picks Markdown, which shows plain text correctly too. Use `-f` when it guesses wrong.
 
 **Documents** share one layout engine: each format is translated into the same block and inline structure as Markdown, so headings, lists, quotes, tables, code frames, links and admonitions look the same whatever the source. HTML drops `script`, `style`, `head` and similar non-content, and decodes entities. reStructuredText and AsciiDoc admonitions and Org `#+BEGIN_NOTE`-style blocks render like GitHub alerts.
 
 **Data** is colored by token: keys, strings, numbers, booleans and null, comments, punctuation, YAML anchors and tags, and TOML table headers. Valid JSON (and NDJSON) is re-indented with two spaces; invalid JSON, YAML and TOML are shown exactly as written. Long lines hard-wrap behind a `┆` bar.
+
+**XML** colors element names, attributes, values, entities, comments, declarations and CDATA. It is re-indented one node per line when tags balance and no element mixes text with child elements; otherwise, for example XHTML-like prose, it is shown exactly as written.
+
+**CSV and TSV** become box-drawn tables like Markdown tables: the first row is the header, numeric columns are right-aligned, quoting follows RFC 4180, and a CSV's delimiter (`,` `;` tab or `|`) is detected. Tables use the full terminal width rather than the 100-column reading cap. Columns shrink to fit but never below 10 characters; a table that still does not fit runs past the edge, and the pager scrolls it sideways with `h` and `l`.
 
 ## Images
 
@@ -158,16 +166,16 @@ The Markdown mapping below is the reference; the other document formats map thei
 - **Theme:** text uses only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it.
 - **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mu emits are its own: SGR styling and, for images, 24-bit colors and Kitty or iTerm2 image sequences whose payload mu encodes itself.
 - **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write, or the pager. Styles are emitted lazily and every line closes its own style, so the pager can draw any window of lines on its own.
-- **Pager terminal handling:** raw mode via `termios`, a self-pipe for `SIGWINCH` so a resize can never be missed between a redraw and the next `poll()`, synchronized-output frames to avoid flicker, and the terminal restored on exit, on error and from a panic hook. Image decoding runs under `catch_unwind`, so a bug in a third-party decoder shows the alt text instead of crashing.
+- **Pager terminal handling:** raw mode via `termios`, a self-pipe for `SIGWINCH` so a resize can never be missed between a redraw and the next `select()` (not `poll()`, which macOS rejects for `/dev/tty`), synchronized-output frames to avoid flicker, and the terminal restored on exit, on error and from a panic hook. Image decoding runs under `catch_unwind`, so a bug in a third-party decoder shows the alt text instead of crashing.
 
 ```text
 src/
   main.rs    CLI: args, input, width/color/paging decisions, single write
-  pager.rs   built-in pager: raw mode, keys, scrolling, resize, status bar
+  pager/     built-in pager: raw mode, keys, scrolling, search, outline, resize, status bar
   term.rs    terminal size via TIOCGWINSZ
-  lib.rs     public API: render, present, detect, sniff, Format, Options
-  format/    Format enum, detection, dispatch; html, rst, org, asciidoc → events
-  data/      styled-line printer; json, yaml, toml highlighters
+  lib.rs     public API: render, present, present_outlined, outline, detect, sniff, Format, Options
+  format/    Format enum, detection, dispatch; html, rst, org, asciidoc, csv → events
+  data/      styled-line printer; json, yaml, toml, xml highlighters
   image/     sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs  event walker: blocks, containers, lists, code frames
   inline.rs  styled word atoms, control-char scrubbing, word wrap
@@ -196,7 +204,7 @@ cargo clippy --all-targets
 cargo run --release -- -w 60 tests/fixtures/kitchen-sink.md
 ```
 
-`tests/render.rs` and one test file per format (`tests/html.rs`, `tests/json.rs`, …) have exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output, every styled line resets before its newline, and no control character from the input reaches the output. `src/pager.rs` unit-tests key decoding, scroll clamping, resize behaviour and the status bar; the pager's terminal I/O was checked by hand in a pseudo-terminal. `tests/sniff.rs` sniffs every fixture against every format so one format's rule cannot quietly claim another's files.
+`tests/render.rs` and one test file per format (`tests/html.rs`, `tests/json.rs`, …) have exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output, every styled line resets before its newline, and no control character from the input reaches the output. `src/pager/` unit-tests key decoding, scrolling, search, the outline, resize behaviour and the status bar, and `tests/pager_pty.rs` drives the real pager in a pseudo-terminal: resizing, search, the outline and sideways scrolling. `tests/sniff.rs` sniffs every fixture against every format so one format's rule cannot quietly claim another's files.
 
 ## Versioning
 
@@ -212,7 +220,8 @@ Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and c
 - URLs: no caching between runs, and charsets other than UTF-8 are shown with replacement characters. A repository's front page is fetched as HTML; point at the README's blob URL instead.
 - Links are not clickable (no OSC 8 hyperlinks); the URL is printed instead.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.
-- A table with too many columns to fit at 3 columns each overflows the width rather than becoming unreadable.
+- A table with too many columns to fit at 3 columns each (10 for CSV and TSV) overflows the width rather than becoming unreadable; the pager scrolls it sideways.
+- Binary plists (`bplist00`) are not decoded.
 - Very deep nesting stops shrinking content below 16 columns and overflows instead.
 - Definition lists, math and wiki links are not enabled; they render as plain text.
 

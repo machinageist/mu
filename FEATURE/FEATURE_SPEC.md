@@ -26,15 +26,24 @@ A terminal presenter that turns markup and data into readable, styled, wrapped t
 | JSON | data | `.json` `.jsonl` `.geojson` |
 | YAML | data | `.yaml` `.yml` |
 | TOML | data | `.toml` |
+| XML | data | `.xml` `.plist` `.xsd` `.xsl` `.xslt` `.rss` `.atom` `.svg` `.opml` |
+| CSV | table | `.csv` |
+| TSV | table | `.tsv` `.tab` |
 
-Document formats share one layout engine. Each one gets the same headings, lists, quotes, tables, code frames, links and pager. Data formats are syntax-highlighted. Valid JSON is also re-indented.
+Document formats share one layout engine. Each one gets the same headings, lists, quotes, tables, code frames, links and pager. Data formats are syntax-highlighted. Valid JSON is also re-indented, and XML is re-indented when its tags balance and no element mixes text with child elements.
+
+Tables (CSV and TSV) go through the same table engine as Markdown tables:
+- The first record is the header, and numeric columns are right-aligned.
+- Quoting follows RFC 4180, and a CSV's delimiter is detected.
+- With an automatic width they use the full terminal width.
+- Columns shrink no narrower than 10 (or their natural width). Beyond that the table overflows, which the pager scrolls sideways.
 
 ## Format selection, first match wins
 
 1. `-f/--format <name>` flag
 2. For a URL, the response `Content-Type`. `text/plain` and `application/octet-stream` are skipped
 3. File extension (case-insensitive), or for a URL the extension of its path, never its host
-4. Content sniffing on the first 8 KB: used for stdin and for unknown or missing extensions. The order is JSON, HTML, Org, RST, AsciiDoc, TOML, YAML, and each rule is conservative
+4. Content sniffing on the first 8 KB: used for stdin and for unknown or missing extensions. The order is JSON, HTML, XML, Org, RST, AsciiDoc, TOML, YAML, then CSV/TSV, and each rule is conservative
 5. Fallback: Markdown, which shows plain text correctly too
 
 `tests/sniff.rs` pins every fixture to its format. A sniffing change must keep it green.
@@ -56,6 +65,7 @@ Document formats share one layout engine. Each one gets the same headings, lists
   - Literal substrings with smart case, matched against each line with SGR removed. A match never spans two lines
   - `n` and `N` wrap round the ends. A match already on screen does not scroll the view
   - Highlighting only inserts SGR. With styling removed, a highlighted line equals the original, and it still resets before its newline
+- **Sideways** (`h` `l` `←` `→`): half a window per step, limited by the widest line. Lines are cut by display column with their SGR state kept, and a wide character cut in half becomes spaces. The status bar shows `col N` while scrolled. A search jump scrolls to its match, and an outline jump returns to column 1
 - **Outline** (`o`):
   - The renderer records each heading's level, plain text and first output line
   - The list opens on the section holding the top line, and `Enter` puts the heading's line at the top, clamped at the end of the document
