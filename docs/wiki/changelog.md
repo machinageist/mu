@@ -2,16 +2,18 @@
 title: Changelog
 group: Project
 order: 2
-summary: Every release from 0.1.0 to 0.8.0, and what's unreleased
+summary: Every release from 0.1.0 to 0.8.1, and what's unreleased
 ---
 
 Every notable change, following [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Mirrors `CHANGELOG.md`.
 
 ## Unreleased {#unreleased}
 
-Changes merged since 0.8.0, not yet in a release.
+Changes merged since 0.8.1, not yet in a release.
 
-### Fixed {#unreleased-fixed}
+## 0.8.1 · 2026-11-12 {#v0-8-1}
+
+### Fixed {#v0-8-1-fixed}
 
 - Syntax coloring keeps quoted comment markers inside preprocessor directives, respects each language's block-comment nesting and hash-comment rules, and recognizes the existing PowerShell and Scheme boolean constants
 - Code highlighting now follows common HTML and EPUB language hints on wrappers and nested `code` elements, with the innermost code language taking precedence. AsciiDoc source languages accept quotes and attribute references, and OPML code blocks use the XML highlighter

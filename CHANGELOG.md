@@ -4,6 +4,8 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+## 0.8.1 - 2026-11-12
+
 ### Fixed
 - Syntax coloring keeps quoted comment markers inside preprocessor directives, respects each language's block-comment nesting and hash-comment rules, and recognizes the existing PowerShell and Scheme boolean constants
 - Code highlighting now follows common HTML and EPUB language hints on wrappers and nested `code` elements, with the innermost code language taking precedence. AsciiDoc source languages accept quotes and attribute references, and OPML code blocks use the XML highlighter
