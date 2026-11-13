@@ -4,6 +4,8 @@
 // Notes: Quotes, list items and footnotes are containers that add a gutter to every line they hold;
 // inline content is buffered per block, wrapped once, then written behind those gutters
 
+use std::collections::HashSet;
+
 use pulldown_cmark::{
     BlockQuoteKind, CodeBlockKind, Event, LinkType, Options as ParseOptions, Parser, Tag, TagEnd,
 };
@@ -11,6 +13,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::data::Span;
 use crate::highlight;
+use crate::hyperlink;
 use crate::image::{self, ImageMode, ImageOptions};
 use crate::inline::{Atom, CONTROL_REPLACEMENT, Inline, Line, push_clean, text_width, wrap};
 use crate::style::{
@@ -71,6 +74,8 @@ const MIN_CONTENT_WIDTH: usize = 16;
 pub struct Options {
     pub width: usize,
     pub color: bool,
+    // Emit validated external OSC 8 hyperlinks, independently of SGR color
+    pub links: bool,
     pub images: ImageOptions,
     // Language for source files, as an extension or name such as `rs` or `python`
     pub language: Option<String>,
@@ -82,6 +87,7 @@ impl Options {
         Options {
             width,
             color,
+            links: false,
             images: ImageOptions::default(),
             language: None,
         }
@@ -121,6 +127,56 @@ enum RawKind {
 struct Raw {
     kind: RawKind,
     text: String,
+    anchors: Vec<(usize, String)>,
+}
+
+// Map ordered source-byte annotations through code's display-column wrapping
+fn raw_anchor_rows(raw: &Raw, limit: usize) -> Vec<(String, usize, usize)> {
+    let mut mapped = Vec::with_capacity(raw.anchors.len());
+    let (mut index, mut row, mut column, mut source_column) = (0, 0, 0, 0);
+    for (offset, ch) in raw
+        .text
+        .char_indices()
+        .map(|(at, ch)| (at, Some(ch)))
+        .chain(std::iter::once((raw.text.len(), None)))
+    {
+        let width = match ch {
+            Some('\n' | '\r') | None => 0,
+            Some('\t') => TAB_STOP - source_column % TAB_STOP,
+            Some(ch) if ch.is_control() => 1,
+            Some(ch) => ch.width().unwrap_or(0),
+        };
+        let first = if ch == Some('\t') { 1 } else { width };
+        if column > 0 && column + first > limit {
+            row += 1;
+            column = 0;
+        }
+        while let Some((at, id)) = raw.anchors.get(index) {
+            if *at > offset {
+                break;
+            }
+            mapped.push((id.clone(), row, column));
+            index += 1;
+        }
+        if ch == Some('\n') {
+            row += 1;
+            column = 0;
+            source_column = 0;
+        } else if ch == Some('\t') {
+            for _ in 0..width {
+                if column >= limit {
+                    row += 1;
+                    column = 0;
+                }
+                column += 1;
+            }
+            source_column += width;
+        } else {
+            column += width;
+            source_column += width;
+        }
+    }
+    mapped
 }
 
 // A heading as written to the output: its level (1-6), plain text, and first output line
@@ -131,17 +187,49 @@ pub struct Heading {
     pub line: usize,
 }
 
+// A chapter-scoped destination at its first rendered output line
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Anchor {
+    pub id: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+// An internal book link, with its semantic label and first rendered output line
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavigationLink {
+    pub target: String,
+    pub label: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+// Structured source annotations never travel through terminal-control strings
+pub(crate) enum DocumentEvent<'a> {
+    Markup(Event<'a>),
+    Anchor(String),
+    ChapterStart,
+    ChapterEnd,
+}
+
 // Rendered output plus the headings found in it, for outlines and jumping
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rendered {
     pub text: String,
     pub headings: Vec<Heading>,
+    pub anchors: Vec<Anchor>,
+    pub links: Vec<NavigationLink>,
 }
 
 struct Renderer<'o> {
     options: &'o Options,
     out: String,
     headings: Vec<Heading>,
+    anchors: Vec<Anchor>,
+    anchor_ids: HashSet<String>,
+    pending_anchors: Vec<String>,
+    navigation: bool,
+    navigation_links: Vec<NavigationLink>,
     // Newlines in `out` up to `counted_bytes`, so each heading's line costs only the new text
     counted_bytes: usize,
     counted_lines: usize,
@@ -153,11 +241,19 @@ struct Renderer<'o> {
     heading: usize,
     raw: Option<Raw>,
     table: Option<Table>,
-    link_urls: Vec<Option<String>>,
+    link_urls: Vec<LinkState>,
     image_mark: usize,
     images: Vec<ImageSpan>,
     // Narrowest a table column may shrink to; wider for data tables, which overflow instead
     table_min_column: usize,
+}
+
+// Nested source links retain their own destination, label span and fallback
+struct LinkState {
+    shown: Option<String>,
+    external: Option<String>,
+    navigation: Option<usize>,
+    start: usize,
 }
 
 // An image in the current inline block: its source, alt text and atom range
@@ -192,6 +288,24 @@ pub(crate) fn render_events<'a>(
     let mut renderer = Renderer::new(options, capacity);
     for event in events {
         renderer.event(event);
+    }
+    renderer.finish()
+}
+
+// Lay out EPUB events with structured, chapter-scoped navigation annotations
+pub(crate) fn render_annotated_events<'a>(
+    events: impl IntoIterator<Item = DocumentEvent<'a>>,
+    options: &Options,
+    capacity: usize,
+) -> Rendered {
+    let mut renderer = Renderer::new(options, capacity);
+    renderer.navigation = true;
+    for event in events {
+        match event {
+            DocumentEvent::Markup(event) => renderer.event(event),
+            DocumentEvent::Anchor(id) => renderer.anchor(id),
+            DocumentEvent::ChapterStart | DocumentEvent::ChapterEnd => renderer.chapter_boundary(),
+        }
     }
     renderer.finish()
 }
@@ -356,6 +470,11 @@ impl<'o> Renderer<'o> {
             options,
             out: String::with_capacity(capacity * 2),
             headings: Vec::new(),
+            anchors: Vec::new(),
+            anchor_ids: HashSet::new(),
+            pending_anchors: Vec::new(),
+            navigation: false,
+            navigation_links: Vec::new(),
             counted_bytes: 0,
             counted_lines: 0,
             inline: Inline::default(),
@@ -376,9 +495,45 @@ impl<'o> Renderer<'o> {
     // Flush whatever is still buffered and hand back the output
     fn finish(mut self) -> Rendered {
         self.flush_inline();
+        let last = self.current_line().saturating_sub(1);
+        for id in std::mem::take(&mut self.pending_anchors) {
+            self.record_anchor(id, last, 0);
+        }
+        self.navigation_links
+            .retain(|link| link.line != usize::MAX && self.anchor_ids.contains(&link.target));
         Rendered {
             text: self.out,
             headings: self.headings,
+            anchors: self.anchors,
+            links: self.navigation_links,
+        }
+    }
+
+    // Attach an ID to inline content, or to the next visible block if none is open
+    fn anchor(&mut self, id: String) {
+        if id.is_empty() || id.chars().any(char::is_control) {
+            return;
+        }
+        if let Some(raw) = &mut self.raw {
+            raw.anchors.push((raw.text.len(), id));
+        } else if self.inline_open {
+            self.inline.anchor(&id);
+        } else {
+            self.pending_anchors.push(id);
+        }
+    }
+
+    // Finish chapter-local output before abandoning IDs with no rendered destination.
+    // Neither an empty chapter nor a trailing zero-width anchor can borrow the next chapter.
+    fn chapter_boundary(&mut self) {
+        self.flush_inline();
+        self.pending_anchors.clear();
+    }
+
+    // Keep the first occurrence of an ID, as with HTML fragment navigation
+    fn record_anchor(&mut self, id: String, line: usize, column: usize) {
+        if self.anchor_ids.insert(id.clone()) {
+            self.anchors.push(Anchor { id, line, column });
         }
     }
 
@@ -447,6 +602,7 @@ impl<'o> Renderer<'o> {
                 self.raw = Some(Raw {
                     kind: RawKind::Code(lang),
                     text: String::new(),
+                    anchors: Vec::new(),
                 });
             }
             Tag::HtmlBlock => {
@@ -454,6 +610,7 @@ impl<'o> Renderer<'o> {
                 self.raw = Some(Raw {
                     kind: RawKind::Html,
                     text: String::new(),
+                    anchors: Vec::new(),
                 });
             }
             Tag::MetadataBlock(_) => {
@@ -461,6 +618,7 @@ impl<'o> Renderer<'o> {
                 self.raw = Some(Raw {
                     kind: RawKind::FrontMatter,
                     text: String::new(),
+                    anchors: Vec::new(),
                 });
             }
             Tag::List(start) => {
@@ -542,6 +700,14 @@ impl<'o> Renderer<'o> {
         }
     }
 
+    // Display columns occupied by the enclosing container gutters
+    fn gutter_width(&self) -> usize {
+        self.containers
+            .iter()
+            .map(|container| container.width)
+            .sum()
+    }
+
     // Columns left for content after container gutters
     fn avail(&self) -> usize {
         let used: usize = self
@@ -557,6 +723,13 @@ impl<'o> Renderer<'o> {
 
     // Write the container gutters that open a content line
     fn line_prefix(&mut self) {
+        if !self.pending_anchors.is_empty() {
+            let line = self.current_line();
+            let column = self.gutter_width();
+            for id in std::mem::take(&mut self.pending_anchors) {
+                self.record_anchor(id, line, column);
+            }
+        }
         for container in &mut self.containers {
             if container.first_used {
                 self.out.push_str(&container.rest);
@@ -584,7 +757,20 @@ impl<'o> Renderer<'o> {
 
     // Write wrapped lines behind the container gutters
     fn emit_lines(&mut self, lines: &[Line]) {
+        let gutter = self.gutter_width();
         for line in lines {
+            let index = self.current_line();
+            for (id, column) in &line.anchors {
+                self.record_anchor(id.clone(), index, gutter + column);
+            }
+            for &(link, column) in &line.links {
+                if let Some(link) = self.navigation_links.get_mut(link)
+                    && link.line == usize::MAX
+                {
+                    link.line = index;
+                    link.column = gutter + column;
+                }
+            }
             self.line_prefix();
             self.out.push_str(&line.text);
             self.out.push('\n');
@@ -638,9 +824,21 @@ impl<'o> Renderer<'o> {
                 self.options.color,
             );
             self.emit_lines(&lines);
+        } else {
+            self.defer_inline_anchors();
         }
         self.inline.clear();
         self.images.clear();
+    }
+
+    // Preserve empty inline anchors until the next visible output line
+    fn defer_inline_anchors(&mut self) {
+        for atom in &self.inline.atoms {
+            if let Atom::Anchor { start, end } = *atom {
+                self.pending_anchors
+                    .push(self.inline.arena[start..end].to_owned());
+            }
+        }
     }
 
     // Mark the enclosing list loose when a paragraph sits directly in one of its items
@@ -848,6 +1046,7 @@ impl<'o> Renderer<'o> {
         let width = self.avail();
 
         // Top edge with the language label
+        let anchors = std::mem::take(&mut self.pending_anchors);
         self.line_prefix();
         paint(&mut self.out, FRAME_TOP, STYLE_FRAME, color);
         let mut used = FRAME_EDGE_WIDTH;
@@ -867,6 +1066,10 @@ impl<'o> Renderer<'o> {
             color,
         );
         self.out.push('\n');
+
+        // Source anchors point to code text rather than the decorative top border
+        self.pending_anchors.extend(anchors);
+        let body_start = self.current_line();
 
         // Highlighted body, when color is on and the language is known
         let language = match &raw.kind {
@@ -893,6 +1096,7 @@ impl<'o> Renderer<'o> {
                     self.out.push('\n');
                 }
             }
+            self.record_raw_anchors(&raw, body_start, width);
             self.frame_bottom(width);
             return;
         }
@@ -918,7 +1122,21 @@ impl<'o> Renderer<'o> {
             }
         }
 
+        self.record_raw_anchors(&raw, body_start, width);
         self.frame_bottom(width);
+    }
+
+    // Bind raw-content anchors after the actual body height is known
+    fn record_raw_anchors(&mut self, raw: &Raw, start: usize, width: usize) {
+        if raw.anchors.is_empty() {
+            return;
+        }
+        let last = self.current_line().saturating_sub(start).saturating_sub(1);
+        let gutter = self.gutter_width() + FRAME_EDGE_WIDTH;
+        for (id, row, column) in raw_anchor_rows(raw, width.saturating_sub(FRAME_EDGE_WIDTH).max(1))
+        {
+            self.record_anchor(id, start + row.min(last), gutter + column);
+        }
     }
 
     // Close a code frame with its bottom edge
@@ -974,6 +1192,9 @@ impl<'o> Renderer<'o> {
         table.cell_start = self.inline.atoms.len();
         self.inline.begin(base);
         self.inline_open = true;
+        for id in std::mem::take(&mut self.pending_anchors) {
+            self.inline.anchor(&id);
+        }
     }
 
     // Record the atoms of the finished cell
@@ -1001,11 +1222,7 @@ impl<'o> Renderer<'o> {
             self.table_min_column,
             self.options.color,
         );
-        for line in lines {
-            self.line_prefix();
-            self.out.push_str(&line);
-            self.out.push('\n');
-        }
+        self.emit_lines(&lines);
         self.inline.clear();
         self.images.clear();
         self.pending_blank = true;
@@ -1072,22 +1289,81 @@ impl<'o> Renderer<'o> {
     fn start_link(&mut self, link_type: LinkType, url: &str) {
         self.open_inline();
         let self_describing = matches!(link_type, LinkType::Autolink | LinkType::Email);
-        let shown_url = (!self_describing && !url.is_empty()).then(|| url.to_owned());
-        self.link_urls.push(shown_url);
+        let target = self
+            .options
+            .links
+            .then(|| {
+                if matches!(link_type, LinkType::Email)
+                    && !url
+                        .get(..7)
+                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("mailto:"))
+                {
+                    hyperlink::destination(&format!("mailto:{url}"))
+                } else {
+                    hyperlink::destination(url)
+                }
+            })
+            .flatten();
+        let navigation = self
+            .navigation
+            .then(|| url.strip_prefix('#'))
+            .flatten()
+            .map(|id| {
+                let index = self.navigation_links.len();
+                self.navigation_links.push(NavigationLink {
+                    target: id.to_owned(),
+                    label: String::new(),
+                    line: usize::MAX,
+                    column: 0,
+                });
+                index
+            });
+        let shown =
+            (target.is_none() && navigation.is_none() && !self_describing && !url.is_empty())
+                .then(|| url.to_owned());
+        self.inline.link(target.as_deref());
+        self.inline.navigate(navigation);
+        self.link_urls.push(LinkState {
+            shown,
+            external: target,
+            navigation,
+            start: self.inline.atoms.len(),
+        });
         let style = self.inline.style().add(ATTR_UNDERLINE).with_fg(FG_LINK);
         self.inline.push_style(style);
     }
 
     // Close a link and append its URL dimmed
     fn end_link(&mut self) {
+        self.inline.link(None);
+        self.inline.navigate(None);
         self.inline.pop_style();
-        if let Some(Some(url)) = self.link_urls.pop() {
+        let Some(link) = self.link_urls.pop() else {
+            return;
+        };
+        if let Some(index) = link.navigation {
+            self.navigation_links[index].label = self.inline.plain_text_from(link.start);
+        }
+        let empty_label = !self
+            .inline
+            .atoms
+            .iter()
+            .skip(link.start)
+            .any(|atom| matches!(atom, Atom::Text { width, .. } if *width > 0));
+        let shown = link
+            .shown
+            .or_else(|| empty_label.then_some(link.external).flatten());
+        if let Some(url) = shown {
             self.inline.space();
             self.inline.push_style(STYLE_URL);
             self.inline.word(URL_OPEN);
             self.inline.word(&url);
             self.inline.word(URL_CLOSE);
             self.inline.pop_style();
+        }
+        if let Some(parent) = self.link_urls.last() {
+            self.inline.link(parent.external.as_deref());
+            self.inline.navigate(parent.navigation);
         }
     }
 
@@ -1127,6 +1403,15 @@ impl<'o> Renderer<'o> {
 
     // Draw the block's only image as a picture with an alt caption, if it stands alone and loads
     fn draw_standalone_image(&mut self) -> bool {
+        // Keep a linked image's actionable alt text rather than losing its destination
+        if self
+            .inline
+            .atoms
+            .iter()
+            .any(|atom| matches!(atom, Atom::Link(Some(_)) | Atom::Navigation(Some(_))))
+        {
+            return false;
+        }
         let options = &self.options.images;
         if !self.options.color || options.mode == ImageMode::Never {
             return false;
@@ -1148,6 +1433,7 @@ impl<'o> Renderer<'o> {
             return false;
         }
         let alt = image.alt.trim().to_owned();
+        self.defer_inline_anchors();
         for line in lines {
             self.line_prefix();
             self.out.push_str(&line);

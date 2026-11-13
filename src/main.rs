@@ -32,6 +32,7 @@ Options:
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100 except
                        for CSV and TSV tables and PDF pages)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
+      --links <WHEN>   auto, always or never (default: auto, supported styled terminals only)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
       --images <MODE>  auto, fetch or never (default: auto, local files and data: URIs only;
                        fetch also downloads http(s) images with curl)
@@ -56,11 +57,14 @@ URL options (curl-like, only valid with a URL):
                        GitHub, GitLab or Gist page
 
 Pager keys:
-  j k  Down Up  Enter   scroll a line        space b  PgDn PgUp   scroll a page
+  j k  Down Up         scroll a line        space b  PgDn PgUp   scroll a page
   d u                   scroll half a page   g G  Home End        jump to top or bottom
   / ?                   search forward, back n N                  next, previous match
   o                     outline of headings  Esc                  clear search highlight
   h l  Left Right       scroll sideways (wide tables)
+  Tab  Shift-Tab        select next, previous EPUB chapter link
+  Enter                 follow a selected EPUB link (otherwise scroll a line)
+  Backspace             return from an EPUB link jump
   q  Ctrl-C             quit";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -78,6 +82,13 @@ const ENV_TMUX: &str = "TMUX";
 const KITTY_TERMS: [&str; 2] = ["xterm-kitty", "xterm-ghostty"];
 const KITTY_PROGRAMS: [&str; 1] = ["ghostty"];
 const ITERM_PROGRAMS: [&str; 2] = ["iTerm.app", "WezTerm"];
+
+// A deliberately small OSC 8 allowlist, independent of native image support
+const ENV_STY: &str = "STY";
+const ENV_VTE_VERSION: &str = "VTE_VERSION";
+const LINK_PROGRAMS: [&str; 3] = ["iTerm.app", "WezTerm", "ghostty"];
+const LINK_TERMS: [&str; 2] = ["xterm-kitty", "xterm-ghostty"];
+const MIN_LINK_VTE_VERSION: u32 = 5000;
 
 // Rows kept free under the tallest image so it fits on one screen with the prompt
 const IMAGE_ROW_MARGIN: usize = 2;
@@ -102,6 +113,7 @@ struct Args {
     format: Option<Format>,
     width: Option<usize>,
     color: When,
+    links: When,
     paging: When,
     // None until --images is given, so a URL can default to fetching
     images: Option<ImageMode>,
@@ -265,7 +277,7 @@ fn load_url(args: &Args, url: &str) -> Result<Source, String> {
     })
 }
 
-// Render every part of a source and join them, shifting each part's heading lines to match
+// Join source parts, shifting each part's navigation metadata to its output lines
 fn present_all(source: &Source, options: &Options) -> Rendered {
     let mut joined = Rendered::default();
     for (input, format) in &source.parts {
@@ -283,6 +295,16 @@ fn present_all(source: &Source, options: &Options) -> Rendered {
                 heading.line += offset;
                 heading
             }));
+        joined
+            .anchors
+            .extend(part.anchors.into_iter().map(|mut anchor| {
+                anchor.line += offset;
+                anchor
+            }));
+        joined.links.extend(part.links.into_iter().map(|mut link| {
+            link.line += offset;
+            link
+        }));
         joined.text.push_str(&part.text);
     }
     joined
@@ -290,19 +312,19 @@ fn present_all(source: &Source, options: &Options) -> Rendered {
 
 // Render a source and page it or write it out
 fn show(args: &Args, source: &Source) -> ExitCode {
+    let color = resolve_color(&args.color);
     let options = Options {
+        links: resolve_links(&args.links, color),
         images: resolve_images(source.images, source.base.clone()),
         language: source.language.clone(),
-        ..Options::new(
-            resolve_width(args.width, source.is_wide()),
-            resolve_color(&args.color),
-        )
+        ..Options::new(resolve_width(args.width, source.is_wide()), color)
     };
 
     // The outline only needs headings, so images stay off and nothing is fetched for them
     if args.toc {
         let mut plain = options.clone();
         plain.images.mode = ImageMode::Never;
+        plain.links = false;
         return write_out(&outline(&present_all(source, &plain).headings, &options));
     }
 
@@ -372,6 +394,7 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
         format: None,
         width: None,
         color: When::Auto,
+        links: When::Auto,
         paging: When::Auto,
         images: None,
         base: None,
@@ -419,6 +442,12 @@ fn parse_args(mut raw: impl Iterator<Item = String>) -> Result<Command, String> 
                     .or_else(|| raw.next())
                     .ok_or("--paging needs a value")?;
                 args.paging = parse_when(&value).ok_or(format!("invalid paging mode '{value}'"))?;
+            }
+            "--links" => {
+                let value = inline_value
+                    .or_else(|| raw.next())
+                    .ok_or("--links needs a value")?;
+                args.links = parse_when(&value).ok_or(format!("invalid links mode '{value}'"))?;
             }
             "--images" => {
                 let value = inline_value
@@ -596,4 +625,40 @@ fn resolve_color(mode: &When) -> bool {
             !no_color && io::stdout().is_terminal()
         }
     }
+}
+
+// Explicit links are independent of SGR; auto additionally requires a known direct terminal.
+fn resolve_links(mode: &When, color: bool) -> bool {
+    match mode {
+        When::Always => true,
+        When::Never => false,
+        When::Auto => color && io::stdout().is_terminal() && supports_links(),
+    }
+}
+
+// Environment evidence is only a conservative heuristic, never a capability handshake.
+// OSC 8 support: iTerm2's escape-code docs, WezTerm's hyperlinks recipe, Ghostty's
+// external-protocol docs, and kitty's allow_hyperlinks documentation.
+// VTE 0.50.0's NEWS records hyperlinks; src/pty.cc defines its numeric VTE_VERSION.
+// Do not query the terminal or spawn a detector, and do not trust outer-terminal
+// markers through uncertain multiplexer paths.
+fn supports_links() -> bool {
+    if std::env::var_os(ENV_TMUX).is_some() || std::env::var_os(ENV_STY).is_some() {
+        return false;
+    }
+    let term = std::env::var(ENV_TERM).unwrap_or_default();
+    if term == "dumb" || term.starts_with("screen") || term.starts_with("tmux") {
+        return false;
+    }
+    let program = std::env::var(ENV_TERM_PROGRAM).unwrap_or_default();
+    if LINK_TERMS.contains(&term.as_str()) || LINK_PROGRAMS.contains(&program.as_str()) {
+        return true;
+    }
+    std::env::var(ENV_VTE_VERSION).is_ok_and(|value| {
+        !value.is_empty()
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && value
+                .parse::<u32>()
+                .is_ok_and(|version| version >= MIN_LINK_VTE_VERSION)
+    })
 }

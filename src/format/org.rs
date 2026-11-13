@@ -851,11 +851,10 @@ fn link(inner: &str, out: &mut Vec<Event<'static>>) {
         Some((target, label)) => (target, Some(label)),
         None => (inner, None),
     };
-    let url = target
-        .strip_prefix(FILE_PREFIX)
-        .unwrap_or(target)
-        .to_owned();
-    if label.is_none() && is_image(&url) {
+    // Only image loading resolves file: paths; semantic links retain their original scheme
+    let image_url = target.strip_prefix(FILE_PREFIX).unwrap_or(target);
+    if label.is_none() && is_image(image_url) {
+        let url = image_url.to_owned();
         out.push(Event::Start(Tag::Image {
             link_type: LinkType::Inline,
             dest_url: CowStr::from(url.clone()),
@@ -866,6 +865,7 @@ fn link(inner: &str, out: &mut Vec<Event<'static>>) {
         out.push(Event::End(TagEnd::Image));
         return;
     }
+    let url = target.to_owned();
     let link_type = if label.is_some() {
         LinkType::Inline
     } else {

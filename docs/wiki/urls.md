@@ -81,6 +81,12 @@ A repository's front page is fetched as HTML. Point at the README's blob URL ins
 
 A fetched page loads its remote images as if `--images fetch` were given, with relative paths resolved against the final URL after redirects. Pass `--images auto` or `never` to stop that.
 
+## Links in fetched pages {#page-links}
+
+Fetching a page is separate from displaying its links. Semantic links to validated absolute HTTP(S)/mailto targets follow [the OSC 8 policy](/wiki/usage#links): enabled links show a clickable label without a redundant URL suffix; otherwise their URLs remain printed. mu does not fetch or open those targets merely by rendering them; the terminal emulator handles activation.
+
+Relative document links and fragments outside EPUB are not resolved against the final URL or the image `--base`; they retain the existing non-actionable representation. URLs appearing in fetched source code or data are not auto-linkified. EPUB chapter links instead use [in-pager keyboard navigation](/wiki/pager#chapter-links), without network access or an external opener.
+
 ## Errors {#http-errors}
 
 | Situation | What happens | Exit |

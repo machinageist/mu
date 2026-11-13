@@ -2,7 +2,8 @@
 // Date: 2026-11-09
 // Description: Decode raw terminal input into keys, and map keys to pager actions
 // Notes: Decoding is the same in every mode; what a key does depends on whether the search prompt
-// is open. A lone ESC counts as the Esc key only when no `[` or `O` follows it in the same read
+// is open. The incremental decoder holds partial input until another read or an input deadline;
+// parse_keys keeps the original one-read behavior for callers that already have complete input
 
 use super::search::Direction;
 
@@ -33,6 +34,9 @@ pub(super) enum Action {
     Outline,
     ScrollLeft,
     ScrollRight,
+    NextLink,
+    PrevLink,
+    Back,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,9 +45,127 @@ pub(super) enum Key {
     Ctrl(u8),
     Enter,
     Backspace,
+    Tab,
     Esc,
     // A navigation key sent as an escape sequence: arrows, Home, End, PgUp, PgDn
     Nav(Action),
+}
+
+// Retained input is bounded even if a terminal sends a sequence with no final byte.
+const MAX_PENDING_BYTES: usize = 256;
+
+// Decode terminal reads without making read boundaries into key boundaries.
+#[derive(Default)]
+pub(super) struct Decoder {
+    pending: Vec<u8>,
+    // After an invalid or oversized sequence, consume its suffix through the final byte
+    // instead of interpreting that suffix as ordinary pager commands.
+    discard_sequence: bool,
+}
+
+impl Decoder {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(super) fn feed(&mut self, bytes: &[u8]) -> Vec<Key> {
+        let mut keys = Vec::new();
+        for &byte in bytes {
+            if self.discard_sequence {
+                if byte == ESC {
+                    self.discard_sequence = false;
+                    self.pending.push(ESC);
+                } else if (0x40..=0x7e).contains(&byte) {
+                    self.discard_sequence = false;
+                }
+                continue;
+            }
+            match self.pending.as_slice() {
+                [ESC] if matches!(byte, b'[' | b'O') => {
+                    self.pending.push(byte);
+                    continue;
+                }
+                [ESC] => {
+                    keys.push(Key::Esc);
+                    self.pending.clear();
+                    // The following byte is a separate key, possibly another ESC.
+                }
+                [ESC, ..] => {
+                    if byte == ESC {
+                        // A fresh escape introducer also recovers from a broken sequence.
+                        self.pending.truncate(1);
+                    } else if (0x40..=0x7e).contains(&byte) {
+                        let params = &self.pending[2..];
+                        // Intermediate bytes form other controls, not navigation keys.
+                        if self.pending.len() < MAX_PENDING_BYTES
+                            && params.iter().all(|byte| (0x30..=0x3f).contains(byte))
+                        {
+                            self.pending.push(byte);
+                            keys.extend(parse_keys(&self.pending));
+                        }
+                        self.pending.clear();
+                    } else if (0x20..=0x3f).contains(&byte)
+                        && self.pending.len() < MAX_PENDING_BYTES
+                        && !(byte >= 0x30
+                            && self
+                                .pending
+                                .last()
+                                .is_some_and(|last| (0x20..=0x2f).contains(last)))
+                    {
+                        self.pending.push(byte);
+                    } else {
+                        self.pending.clear();
+                        self.discard_sequence = true;
+                    }
+                    continue;
+                }
+                [] => {}
+                _ => {
+                    if (0x80..=0xbf).contains(&byte) {
+                        self.pending.push(byte);
+                        match std::str::from_utf8(&self.pending) {
+                            Ok(text) => {
+                                keys.extend(text.chars().next().map(Key::Char));
+                                self.pending.clear();
+                            }
+                            Err(error) if error.error_len().is_some() => self.pending.clear(),
+                            Err(_) => {}
+                        }
+                        continue;
+                    }
+                    // An invalid UTF-8 prefix must not swallow the next independent key.
+                    self.pending.clear();
+                }
+            }
+            match byte {
+                ESC | 0xc2..=0xf4 => self.pending.push(byte),
+                b'\r' | b'\n' => keys.push(Key::Enter),
+                DEL | BACKSPACE => keys.push(Key::Backspace),
+                b'\t' => keys.push(Key::Tab),
+                0x00..=0x1f => keys.push(Key::Ctrl(byte)),
+                0x20..=0x7e => keys.push(Key::Char(char::from(byte))),
+                _ => {}
+            }
+        }
+        keys
+    }
+
+    pub(super) fn has_pending(&self) -> bool {
+        !self.pending.is_empty() || self.discard_sequence
+    }
+
+    // Called at the input deadline: only a lone ESC becomes a key. Other partial input
+    // is dropped as a unit so parameter bytes cannot become pager commands.
+    pub(super) fn flush(&mut self) -> Vec<Key> {
+        let keys = if self.pending.as_slice() == [ESC] {
+            vec![Key::Esc]
+        } else {
+            Vec::new()
+        };
+        self.pending.clear();
+        self.discard_sequence = false;
+        keys
+    }
 }
 
 // Decode a read's worth of bytes into keys, skipping sequences with no meaning here
@@ -70,6 +192,7 @@ pub(super) fn parse_keys(bytes: &[u8]) -> Vec<Key> {
             ESC => (Some(Key::Esc), 1),
             b'\r' | b'\n' => (Some(Key::Enter), 1),
             DEL | BACKSPACE => (Some(Key::Backspace), 1),
+            b'\t' => (Some(Key::Tab), 1),
             0x00..=0x1f => (Some(Key::Ctrl(byte)), 1),
             0x20..=0x7e => (Some(Key::Char(char::from(byte))), 1),
             _ => decode_utf8(&bytes[index..]),
@@ -106,6 +229,7 @@ fn escape_action(params: &[u8], final_byte: u8) -> Option<Action> {
         (b'F', _) | (b'~', b"4" | b"8") => Some(Action::Bottom),
         (b'~', b"5") => Some(Action::PageUp),
         (b'~', b"6") => Some(Action::PageDown),
+        (b'Z', b"") => Some(Action::PrevLink),
         _ => None,
     }
 }
@@ -129,6 +253,8 @@ pub(super) fn normal_action(key: Key) -> Option<Action> {
         Key::Char('o') => Some(Action::Outline),
         Key::Char('h') => Some(Action::ScrollLeft),
         Key::Char('l') => Some(Action::ScrollRight),
+        Key::Tab => Some(Action::NextLink),
+        Key::Backspace => Some(Action::Back),
         Key::Esc => Some(Action::ClearSearch),
         Key::Nav(action) => Some(action),
         _ => None,

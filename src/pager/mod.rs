@@ -9,22 +9,26 @@ mod keys;
 mod outline;
 mod search;
 
+use std::collections::{HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::{Duration, Instant};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use mu::{Heading, Rendered, outline_entries};
+use mu::{Anchor, Heading, NavigationLink, Rendered, outline_entries};
 
 use crate::term::{self, Size};
 
-use keys::{Action, CTRL_C, CTRL_U, Key, normal_action, parse_keys};
+#[cfg(test)]
+use keys::parse_keys;
+use keys::{Action, CTRL_C, CTRL_U, Decoder, Key, normal_action};
 use outline::Outline;
-use search::{Direction, Hit, Search, highlight, strip_sgr};
+use search::{Direction, Hit, Search, Token, highlight, strip_sgr, tokens};
 
 const TTY_PATH: &str = "/dev/tty";
 
@@ -49,7 +53,9 @@ const SELECTED_STYLE: &str = "\x1b[7m";
 const COLUMN_PREFIX: &str = "col ";
 // A search jump that scrolls sideways leaves the match this far into the window
 const MATCH_LEAD_DIVISOR: usize = 4;
-const SGR_INTRODUCER: &str = "\x1b[";
+const OSC8_CLOSE: &str = "\x1b]8;;\x1b\\";
+// History is session-local and bounded even when cycling around a book.
+const MAX_LINK_HISTORY: usize = 128;
 const PROMPT_CURSOR: char = '█';
 const NOT_FOUND_PREFIX: &str = "not found: ";
 const WRAPPED_NOTE: &str = " wrapped";
@@ -64,9 +70,11 @@ const FALLBACK_SIZE: Size = Size {
 
 // Bytes read from the terminal at once
 const KEY_BUFFER_SIZE: usize = 64;
+// Allow split terminal key sequences while keeping a lone Escape responsive
+const KEY_SEQUENCE_WAIT: Duration = Duration::from_millis(100);
 
 // Terminal settings to put back if a panic ends the process mid-session
-static ACTIVE_MODE: Mutex<Option<(RawFd, libc::termios)>> = Mutex::new(None);
+static ACTIVE_MODE: Mutex<Option<(RawFd, libc::termios, bool)>> = Mutex::new(None);
 
 // Write end of the resize pipe, read by the signal handler
 static RESIZE_WAKE_FD: AtomicI32 = AtomicI32::new(-1);
@@ -170,11 +178,22 @@ impl Document {
     }
 }
 
+// A return position and the source link that locates it again after reflow.
+struct Visit {
+    top: usize,
+    left: usize,
+    source: usize,
+}
+
 // Everything the pager shows and remembers between keys, apart from the terminal itself
 struct Pager {
     title: String,
     document: Document,
     headings: Vec<Heading>,
+    anchors: HashMap<String, (usize, usize)>,
+    links: Vec<NavigationLink>,
+    selected_link: Option<usize>,
+    history: VecDeque<Visit>,
     view: View,
     // Window width, and how many columns are scrolled off to the left
     columns: usize,
@@ -198,10 +217,14 @@ impl Pager {
             total: document.len(),
             rows,
         };
-        Pager {
+        let mut pager = Pager {
             title: title.chars().filter(|ch| !ch.is_control()).collect(),
             document,
             headings: rendered.headings,
+            anchors: HashMap::new(),
+            links: Vec::new(),
+            selected_link: None,
+            history: VecDeque::new(),
             view,
             columns: FALLBACK_SIZE.columns,
             left: 0,
@@ -211,7 +234,9 @@ impl Pager {
             last_query: None,
             note: None,
             wrapped: false,
-        }
+        };
+        pager.set_navigation(rendered.anchors, rendered.links);
+        pager
     }
 
     // Act on one key; true means quit
@@ -255,7 +280,15 @@ impl Pager {
             }
             return false;
         }
-        match normal_action(key) {
+        if key == Key::Enter && self.selected_link.is_some() {
+            self.follow_link();
+            return false;
+        }
+        let action = normal_action(key);
+        if action.is_some() && !matches!(action, Some(Action::NextLink | Action::PrevLink)) {
+            self.selected_link = None;
+        }
+        match action {
             Some(Action::Quit) => return true,
             Some(Action::Outline) if self.headings.is_empty() => {
                 self.note = Some(NO_HEADINGS.to_owned());
@@ -267,6 +300,14 @@ impl Pager {
             Some(Action::Search(direction)) => self.prompt = Some((direction, String::new())),
             Some(Action::NextMatch) => self.step(false),
             Some(Action::PrevMatch) => self.step(true),
+            Some(Action::NextLink) => self.select_link(false),
+            Some(Action::PrevLink) => self.select_link(true),
+            Some(Action::Back) => {
+                if let Some(visit) = self.history.pop_back() {
+                    self.view.top = visit.top.min(self.view.max_top());
+                    self.left = visit.left.min(self.max_left());
+                }
+            }
             Some(Action::ClearSearch) => self.search = None,
             Some(Action::ScrollRight) => {
                 let step = (self.columns / 2).max(1);
@@ -279,6 +320,121 @@ impl Pager {
             None => {}
         }
         false
+    }
+
+    // Only resolvable internal links enter the selection cycle. Reflow uses fresh metadata;
+    // return positions follow their source link, or are dropped if that identity changed.
+    fn set_navigation(&mut self, anchors: Vec<Anchor>, mut links: Vec<NavigationLink>) {
+        self.anchors.clear();
+        for anchor in anchors {
+            if anchor.line < self.document.len() && !anchor.id.is_empty() {
+                self.anchors
+                    .entry(anchor.id)
+                    .or_insert((anchor.line, anchor.column));
+            }
+        }
+        links.retain(|link| {
+            link.line < self.document.len() && self.anchors.contains_key(&link.target)
+        });
+        links.sort_by_key(|link| link.line);
+        for link in &mut links {
+            let plain: String = link.label.chars().filter(|ch| !ch.is_control()).collect();
+            link.label = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+            if link.label.is_empty() {
+                link.label = "link".to_owned();
+            }
+        }
+        let max_top = self.view.max_top();
+        let max_left = self.max_left();
+        self.history.retain_mut(|visit| {
+            let Some(old) = self.links.get(visit.source) else {
+                return false;
+            };
+            let Some(new) = links.get(visit.source) else {
+                return false;
+            };
+            if old.target != new.target || old.label != new.label {
+                return false;
+            }
+            visit.top = visit
+                .top
+                .saturating_add(new.line)
+                .saturating_sub(old.line)
+                .min(max_top);
+            visit.left = visit
+                .left
+                .saturating_add(new.column)
+                .saturating_sub(old.column)
+                .min(max_left);
+            true
+        });
+        self.links = links;
+        self.selected_link = None;
+    }
+
+    // Cycle through source links in document order, starting at the current viewport.
+    fn select_link(&mut self, reverse: bool) {
+        let count = self.links.len();
+        if count == 0 {
+            return;
+        }
+        let index = match self.selected_link {
+            Some(index) if reverse => (index + count - 1) % count,
+            Some(index) => (index + 1) % count,
+            None if reverse => self
+                .links
+                .iter()
+                .rposition(|link| link.line < self.view.top)
+                .unwrap_or(count - 1),
+            None => self
+                .links
+                .iter()
+                .position(|link| link.line >= self.view.top)
+                .unwrap_or(0),
+        };
+        self.selected_link = Some(index);
+        self.view.show(self.links[index].line);
+        let link = &self.links[index];
+        let available = self.document.line(link.line).map_or(0, |line| {
+            strip_sgr(line).width().saturating_sub(link.column)
+        });
+        self.reveal_column(link.column, link.label.width().min(available));
+    }
+
+    // Reveal a navigation position without losing selection to a manual scroll action
+    fn reveal_column(&mut self, column: usize, span: usize) {
+        let span = span.clamp(1, self.columns.max(1));
+        let end = column.saturating_add(span);
+        if column < self.left || end > self.left.saturating_add(self.columns) {
+            self.left = end
+                .saturating_sub(self.columns)
+                .max(column.saturating_sub(self.columns / MATCH_LEAD_DIVISOR))
+                .min(self.max_left());
+        }
+    }
+
+    fn follow_link(&mut self) {
+        let Some(index) = self.selected_link.take() else {
+            return;
+        };
+        let Some((line, column)) = self
+            .links
+            .get(index)
+            .and_then(|link| self.anchors.get(&link.target))
+            .copied()
+        else {
+            return;
+        };
+        self.history.push_back(Visit {
+            top: self.view.top,
+            left: self.left,
+            source: index,
+        });
+        if self.history.len() > MAX_LINK_HISTORY {
+            self.history.pop_front();
+        }
+        self.view.top = line.min(self.view.max_top());
+        self.reveal_column(column, 1);
     }
 
     // Search for a query, or repeat the last one when the prompt was left empty
@@ -350,15 +506,24 @@ impl Pager {
 
     // Take a re-rendered document, or just a new height, keeping the place and the search
     fn relayout(&mut self, rendered: Option<Rendered>, rows: usize) {
-        if let Some(rendered) = rendered {
+        let navigation = rendered.map(|rendered| {
             self.document = Document::new(rendered.text);
             self.headings = rendered.headings;
             if let Some(search) = &mut self.search {
                 let document = &self.document;
                 search.rescan((0..document.len()).filter_map(|index| document.line(index)));
             }
-        }
+            (rendered.anchors, rendered.links)
+        });
         self.view.resize(self.document.len(), rows);
+        if let Some((anchors, links)) = navigation {
+            self.set_navigation(anchors, links);
+        }
+        self.selected_link = None;
+        let max_top = self.view.max_top();
+        for visit in &mut self.history {
+            visit.top = visit.top.min(max_top);
+        }
         self.left = self.left.min(self.max_left());
         let top = self.view.top;
         if let Some(search) = &mut self.search {
@@ -390,6 +555,9 @@ impl Pager {
                     None => line.to_owned(),
                 };
                 frame.push_str(&cut_left(&shown, self.left));
+                if shown.contains("\x1b]8;") {
+                    frame.push_str(OSC8_CLOSE);
+                }
             }
             frame.push_str(CLEAR_TO_EOL);
             frame.push_str(ROW_END);
@@ -453,9 +621,31 @@ impl Pager {
             String::new()
         };
         let place = format!("{column}{first}-{last}/{} {percent}%", view.total);
-        let mut right = format!("{found}{place}  {STATUS_HINT} ");
+        let back = if self.history.is_empty() {
+            ""
+        } else {
+            "  Backspace back"
+        };
+        if let Some(link) = self.selected_link.and_then(|index| self.links.get(index)) {
+            let label = format!("{}  Enter follow", link.label);
+            let right = format!("{place}{back} ");
+            if label.width() + right.width() + 2 > columns {
+                // The semantic label matters more than position/history on narrow screens.
+                let right = fit_left("Enter follow ", columns.saturating_sub(2));
+                let left = fit_left(&link.label, columns.saturating_sub(right.width() + 2));
+                return bar(&left, &right, columns);
+            }
+            let left = fit_left(&label, columns.saturating_sub(right.width() + 2));
+            return bar(&left, &right, columns);
+        }
+        let links = if self.links.is_empty() {
+            ""
+        } else {
+            "Tab links  "
+        };
+        let mut right = format!("{found}{place}{back}  {links}{STATUS_HINT} ");
         if right.width() + 2 > columns {
-            right = format!("{found}{place} ");
+            right = format!("{found}{place}{back} ");
         }
         let right = fit_left(&right, columns.saturating_sub(2));
         let left = self.note.as_deref().unwrap_or(&self.title);
@@ -464,22 +654,22 @@ impl Pager {
     }
 }
 
-// Drop the first `left` display columns of a styled line, keeping every SGR so colors stay right
-// Notes: a wide character cut in half becomes spaces for its visible half
+// Drop the first `left` display columns without splitting SGR or OSC 8 controls.
+// A wide character cut in half becomes spaces for its visible half.
 fn cut_left(line: &str, left: usize) -> String {
     if left == 0 {
         return line.to_owned();
     }
     let mut out = String::with_capacity(line.len());
     let mut column = 0;
-    let mut rest = line;
-    while let Some(ch) = rest.chars().next() {
-        if rest.starts_with(SGR_INTRODUCER) {
-            let end = rest.find('m').map_or(rest.len(), |at| at + 1);
-            out.push_str(&rest[..end]);
-            rest = &rest[end..];
-            continue;
-        }
+    for token in tokens(line) {
+        let ch = match token {
+            Token::Sgr(sequence) | Token::Osc8(sequence) => {
+                out.push_str(sequence);
+                continue;
+            }
+            Token::Char(ch) => ch,
+        };
         let width = ch.width().unwrap_or(0);
         if column >= left {
             out.push(ch);
@@ -487,7 +677,6 @@ fn cut_left(line: &str, left: usize) -> String {
             out.push_str(&" ".repeat(column + width - left));
         }
         column += width;
-        rest = &rest[ch.len_utf8()..];
     }
     out
 }
@@ -510,6 +699,7 @@ fn bar(left: &str, right: &str, columns: usize) -> String {
 pub struct Session {
     tty: File,
     original: libc::termios,
+    hyperlinks: bool,
 }
 
 impl Session {
@@ -525,10 +715,14 @@ impl Session {
         raw.c_cc[libc::VTIME] = 0;
         set_mode(fd, &raw)?;
         if let Ok(mut active) = ACTIVE_MODE.lock() {
-            *active = Some((fd, original));
+            *active = Some((fd, original, false));
         }
         install_panic_hook();
-        let mut session = Session { tty, original };
+        let mut session = Session {
+            tty,
+            original,
+            hyperlinks: false,
+        };
         session.tty.write_all(SCREEN_ENTER.as_bytes())?;
         Ok(session)
     }
@@ -542,26 +736,36 @@ impl Session {
     ) -> io::Result<()> {
         let resize = ResizeSignal::install()?;
         let mut size = self.size();
+        self.track_links(&rendered);
         let mut pager = Pager::new(title, rendered, body_rows(size));
         pager.columns = size.columns;
         let mut frame = String::new();
         let mut keys = [0; KEY_BUFFER_SIZE];
+        let mut decoder = Decoder::new();
+        let mut input_deadline = None;
         let mut clear = false;
         loop {
             pager.draw(&mut frame, size.columns, clear);
             self.tty.write_all(frame.as_bytes())?;
             clear = false;
 
-            let (input_ready, resized) =
-                wait_for_input(self.tty.as_raw_fd(), resize.read.as_raw_fd())?;
+            let (input_ready, resized) = wait_for_input(
+                self.tty.as_raw_fd(),
+                resize.read.as_raw_fd(),
+                input_deadline,
+            )?;
             if resized {
                 resize.drain();
                 size = self.size();
                 pager.columns = size.columns;
-                pager.relayout(relayout(size.columns), body_rows(size));
+                let rendered = relayout(size.columns);
+                if let Some(rendered) = &rendered {
+                    self.track_links(rendered);
+                }
+                pager.relayout(rendered, body_rows(size));
                 clear = true;
             }
-            if input_ready {
+            let decoded = if input_ready {
                 let count = match self.tty.read(&mut keys) {
                     Ok(0) => return Ok(()),
                     Ok(count) => count,
@@ -575,11 +779,34 @@ impl Session {
                     }
                     Err(error) => return Err(error),
                 };
-                for key in parse_keys(&keys[..count]) {
-                    if pager.handle(key) {
-                        return Ok(());
-                    }
+                let decoded = decoder.feed(&keys[..count]);
+                input_deadline = decoder
+                    .has_pending()
+                    .then(|| Instant::now() + KEY_SEQUENCE_WAIT);
+                decoded
+            } else if input_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                input_deadline = None;
+                decoder.flush()
+            } else {
+                Vec::new()
+            };
+            for key in decoded {
+                if pager.handle(key) {
+                    return Ok(());
                 }
+            }
+        }
+    }
+
+    // Cleanup closes OSC 8 only if this session could have emitted it; --links never
+    // therefore remains entirely free of OSC 8 controls, including on normal exit.
+    fn track_links(&mut self, rendered: &Rendered) {
+        if !self.hyperlinks && rendered.text.contains("\x1b]8;") {
+            self.hyperlinks = true;
+            if let Ok(mut active) = ACTIVE_MODE.lock()
+                && let Some((_, _, hyperlinks)) = active.as_mut()
+            {
+                *hyperlinks = true;
             }
         }
     }
@@ -596,7 +823,7 @@ impl Drop for Session {
         if let Ok(mut active) = ACTIVE_MODE.lock() {
             *active = None;
         }
-        restore_terminal(self.tty.as_raw_fd(), &self.original);
+        restore_terminal(self.tty.as_raw_fd(), &self.original, self.hyperlinks);
     }
 }
 
@@ -680,7 +907,7 @@ extern "C" fn on_resize(_signal: libc::c_int) {
 // Block until a key arrives or the window is resized
 // Notes: select(), not poll(): macOS poll() rejects /dev/tty with POLLNVAL straight away, which
 // once made a resize wait for the next key because the loop sat in a blocking read
-fn wait_for_input(tty: RawFd, wake: RawFd) -> io::Result<(bool, bool)> {
+fn wait_for_input(tty: RawFd, wake: RawFd, deadline: Option<Instant>) -> io::Result<(bool, bool)> {
     let highest = tty.max(wake);
     // FD_SETSIZE's integer type differs by platform, so compare both as u64
     if u64::try_from(highest).map_or(true, |fd| fd >= libc::FD_SETSIZE as u64) {
@@ -694,12 +921,23 @@ fn wait_for_input(tty: RawFd, wake: RawFd) -> io::Result<(bool, bool)> {
             libc::FD_ZERO(&mut ready);
             libc::FD_SET(tty, &mut ready);
             libc::FD_SET(wake, &mut ready);
+            // The live timeout is at most 100ms, fitting suseconds_t on supported Unix platforms
+            let mut timeout = deadline.map(|deadline| libc::timeval {
+                tv_sec: 0,
+                tv_usec: deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_micros()
+                    .min(KEY_SEQUENCE_WAIT.as_micros())
+                    as libc::suseconds_t,
+            });
             let status = libc::select(
                 highest + 1,
                 &mut ready,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                timeout
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), std::ptr::from_mut),
             );
             (status, ready)
         };
@@ -736,9 +974,12 @@ fn set_mode(fd: RawFd, mode: &libc::termios) -> io::Result<()> {
 }
 
 // Leave the alternate screen and put the line settings back
-fn restore_terminal(fd: RawFd, mode: &libc::termios) {
+fn restore_terminal(fd: RawFd, mode: &libc::termios, hyperlinks: bool) {
     // SAFETY: the buffer is a static string valid for its full length
     unsafe {
+        if hyperlinks {
+            libc::write(fd, OSC8_CLOSE.as_ptr().cast(), OSC8_CLOSE.len());
+        }
         libc::write(fd, SCREEN_LEAVE.as_ptr().cast(), SCREEN_LEAVE.len());
     }
     let _ = set_mode(fd, mode);
@@ -749,9 +990,9 @@ fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Ok(mut active) = ACTIVE_MODE.try_lock()
-            && let Some((fd, mode)) = active.take()
+            && let Some((fd, mode, hyperlinks)) = active.take()
         {
-            restore_terminal(fd, &mode);
+            restore_terminal(fd, &mode, hyperlinks);
         }
         previous(info);
     }));
@@ -850,6 +1091,7 @@ mod tests {
             Rendered {
                 text,
                 headings: Vec::new(),
+                ..Rendered::default()
             },
             rows,
         )
@@ -963,6 +1205,7 @@ mod tests {
             Some(Rendered {
                 text: "match\nnone\nmatch\n".to_owned(),
                 headings: Vec::new(),
+                ..Rendered::default()
             }),
             20,
         );
@@ -1006,7 +1249,15 @@ mod tests {
                 line,
             })
             .collect();
-        Pager::new("doc.md", Rendered { text, headings }, rows)
+        Pager::new(
+            "doc.md",
+            Rendered {
+                text,
+                headings,
+                ..Rendered::default()
+            },
+            rows,
+        )
     }
 
     #[test]
@@ -1084,6 +1335,7 @@ mod tests {
                     text: "Only".to_owned(),
                     line: 1,
                 }],
+                ..Rendered::default()
             }),
             10,
         );
@@ -1108,6 +1360,7 @@ mod tests {
                     text: "Top".to_owned(),
                     line: 0,
                 }],
+                ..Rendered::default()
             },
             rows,
         );

@@ -10,7 +10,7 @@ How input becomes terminal output, traced through the real functions. Each map l
 
 ## 1 · End to end {#map-1}
 
-The two paths through mu. Input is a file, stdin or a URL fetched with curl. Documents become one event stream that a single layout engine lays out, and CSV and TSV join that stream as table events. Data formats and source code become styled lines for a simpler printer. Both produce plain lines with their own SGR styling, which either print once or open in the pager.
+The two paths through mu. Input is a file, stdin or a URL fetched with curl. Documents become one event stream that a single layout engine lays out, and CSV and TSV join that stream as table events. Data formats and source code become styled lines for a simpler printer. Both produce terminal lines with their own SGR styling; semantic document links can also carry validated OSC 8 controls. Lines print once or open in the pager with heading and internal EPUB navigation metadata.
 
 ```mermaid
 flowchart LR
@@ -18,20 +18,22 @@ flowchart LR
   URL(["http or https URL"]) --> FE["load_url<br/>system curl, see map 8"]
   FE --> DET
   RD --> DET{"Which format?"}
-  DET -->|"-f, Content-Type, extension, or sniff"| P["present"]
+  DET -->|"-f, Content-Type, extension, or sniff"| P["present_outlined"]
   P -->|"Markdown"| PC["pulldown-cmark Parser"]
   P -->|"HTML, RST, Org, AsciiDoc"| FP["format::*::events<br/>hand-written parsers"]
   P -->|"CSV, TSV"| CS["csv::events<br/>header row, numbers right-aligned"]
   PC --> EV["pulldown-cmark Event stream"]
   FP --> EV
   CS --> EV
-  EV --> RE["render_events<br/>shared layout engine, records headings"]
+  EV --> RE["render_events / render_annotated_events<br/>shared layout engine, records headings"]
+  P -->|"EPUB, after extract"| EP["HTML annotated events<br/>chapter-scoped anchors and internal links"]
+  EP --> RE
   P -->|"JSON, YAML, TOML, XML"| HL["data::*::highlight"]
   P -->|"source code"| CL["data::code::lines<br/>verbatim"]
   CL --> SL
   HL --> SL["Styled lines"]
   SL --> DP["data::print"]
-  RE --> OUT["Terminal lines<br/>each closes its own style"]
+  RE --> OUT["Terminal lines and metadata<br/>each line closes its style and hyperlink"]
   DP --> OUT
   OUT --> PG{"Taller than the screen?"}
   PG -->|"yes"| PAGER["Built-in pager"]
@@ -64,9 +66,9 @@ flowchart TD
   LF -->|"io error"| E1
   LU --> SRC["Source: parts, title, base,<br/>image mode, HTTP failure"]
   LF --> SRC
-  SRC --> SH["show<br/>Options: resolve_width, resolve_color,<br/>resolve_images"]
+  SRC --> SH["show<br/>Options: resolve_width, resolve_color,<br/>resolve_links, resolve_images"]
   SH --> TOC{"--toc?"}
-  TOC -->|"yes"| OL["outline of present_all's headings,<br/>images off"]
+  TOC -->|"yes"| OL["outline of present_all's headings,<br/>images and OSC 8 off"]
   OL --> WR
   TOC -->|"no"| P["present_all<br/>each part in its own format, half-blocks"]
   P --> SP{"should_page?"}
@@ -88,6 +90,7 @@ flowchart TD
 | --- | --- |
 | resolve_width | `-w N` wins, at least 20. Otherwise the terminal width, clamped to 20–100, or with no upper cap for CSV and TSV. With no terminal, 80. The width is probed on stdout, then stderr, then stdin, so `mu x \| less -R` still sees the real width. |
 | resolve_color | `always` / `never` as given. With `auto`, color is on when stdout is a terminal and `NO_COLOR` is unset or empty. |
+| resolve_links | `always` / `never` as given, independent of color. Auto requires terminal stdout, resolved color enabled and the conservative environment whitelist in [Usage](/wiki/usage#links); unknown terminals and multiplexer paths fall back without querying the terminal. |
 | resolve_images | Mode from `--images`, else `fetch` for a URL and `auto` for a file. Base from `--base`, else the file path or the final URL. Cell pixels from TIOCGWINSZ, else 8×16. At most the screen height minus 2 rows. |
 | should_page | Never when stdout is not a terminal. `never` → no, `always` → yes. With `auto`, it pages only when the output has more lines than the screen minus one, like `less -F`. |
 
@@ -150,6 +153,8 @@ flowchart TD
 
 One `Renderer` consumes events from any document format. Inline text collects as styled word atoms. When its block ends, the atoms are wrapped to the width left after container gutters, such as quote bars and list indents, and then written behind those gutters.
 
+`start_link` validates external destinations before URI encoding, accepting only absolute HTTP(S)/mailto targets with an ASCII payload of at most 8192 encoded bytes. Eligible labels emit OSC 8 without a redundant URL suffix; disabled or rejected links retain the fallback. EPUB annotated anchors and internal links instead become output-line metadata, independent of OSC 8 and color. No source/code/data URL auto-linkification is performed.
+
 ```mermaid
 flowchart TD
   EV["Next event"] --> K{"Event kind"}
@@ -158,7 +163,8 @@ flowchart TD
   ST -->|"BlockQuote, Item, Footnote"| CT["push Container<br/>gutter: quote bar, bullet, number, label"]
   ST -->|"CodeBlock, Metadata, HtmlBlock"| RAW["start Raw buffer"]
   ST -->|"Table"| TB["start Table<br/>cells collect as atoms"]
-  ST -->|"Emphasis, Strong, Link, Image"| STY["push inline style<br/>link remembers its URL"]
+  ST -->|"Emphasis, Strong, Image"| STY["push inline style"]
+  ST -->|"Link"| LI["start_link<br/>validated OSC 8, internal navigation,<br/>or remember printed fallback"]
   K -->|"Text, Code, breaks"| TX{"Raw block open?"}
   TX -->|"yes"| RAWT["append verbatim"]
   TX -->|"no"| AT["Inline atoms in one arena<br/>words, spaces, styles<br/>control chars become U+FFFD"]
@@ -171,7 +177,8 @@ flowchart TD
   EN -->|"Quote, Item, Footnote"| POP["pop Container"]
   K -->|"Rule"| RU["dim rule across the width"]
   K -->|"TaskListMarker"| TM["swap bullet for a checkbox"]
-  EMIT --> OUT["output String"]
+  EN -->|"Link"| LE["end_link<br/>close destination, record label,<br/>append URL only for fallback"]
+  EMIT --> OUT["output String and metadata<br/>close OSC 8 before newlines and gutters"]
   FR --> OUT
   HB --> OUT
   TR --> OUT
@@ -179,6 +186,8 @@ flowchart TD
 ```
 
 - `src/render.rs:Renderer::event` · `start` · `end`
+- `src/render.rs:Renderer::start_link` · `end_link`, `src/hyperlink.rs:destination`
+- `src/book/epub.rs:rewrite` · `internal_target`, `src/format/html.rs:annotated_events`
 - `src/render.rs:flush_inline` · `emit_lines` · `line_prefix`
 - `src/render.rs:end_framed` · `verbatim_chunks`
 - `src/inline.rs:Inline` · `wrap` · `push_clean`
@@ -238,7 +247,7 @@ flowchart TD
 
 ## 6 · Pager loop {#map-6}
 
-The built-in pager reads keys from `/dev/tty`, which is why `curl … | mu` can page. It waits with `select()`, because macOS `poll()` rejects `/dev/tty`. A resize arrives through a self-pipe, so the wait can never miss it. When the width is automatic, a resize re-renders at the new width and keeps the reader's place proportionally, and any search and outline follow the new layout. A key goes to the search prompt or the outline when one is open, and to scrolling otherwise.
+The built-in pager reads keys from `/dev/tty`, which is why `curl … | mu` can page. It waits with `select()`, because macOS `poll()` rejects `/dev/tty`. A resize arrives through a self-pipe, so the wait can never miss it. When the width is automatic, a resize re-renders at the new width and keeps the reader's place proportionally; search, outlines and EPUB navigation follow the new layout. A key goes to the search prompt or outline when one is open, and otherwise to internal-link navigation or scrolling. Chapter jumps use rendered anchor metadata, not emulator mouse clicks or external file/network openers.
 
 ```mermaid
 flowchart TD
@@ -247,7 +256,7 @@ flowchart TD
   D --> W["select on tty and resize pipe"]
   W -->|"resize"| RS["drain pipe, read the new size"]
   RS --> RL{"relayout columns:<br/>width is automatic and changed?"}
-  RL -->|"yes"| RR["present again at the new width,<br/>new headings, search rescanned"]
+  RL -->|"yes"| RR["present again at the new width,<br/>new headings and navigation,<br/>search rescanned"]
   RL -->|"no"| KEEP["keep the document"]
   RR --> VR["Pager::relayout<br/>top scaled to the new length,<br/>left column clamped"]
   KEEP --> VR
@@ -256,11 +265,14 @@ flowchart TD
   KEY -->|"tty closed"| Q
   KEY --> MODE{"Pager::handle:<br/>what is open?"}
   MODE -->|"search prompt"| PR["edit the query;<br/>Enter runs it, Esc cancels"]
-  PR --> SE["run_search<br/>smart-case literal over SGR-stripped lines,<br/>jump to the first match from the top line"]
+  PR --> SE["run_search<br/>smart-case literal over visible text,<br/>SGR and OSC 8 controls removed"]
   SE --> D
   MODE -->|"outline"| OL["move the selection;<br/>Enter jumps to the heading, o q Esc close"]
   OL --> D
-  MODE -->|"nothing"| A{"normal_action"}
+  MODE -->|"nothing"| SEL{"Enter with an internal<br/>link selected?"}
+  SEL -->|"yes"| FOLLOW["follow_link<br/>save return view, jump to rendered anchor"]
+  FOLLOW --> D
+  SEL -->|"no"| A{"normal_action"}
   A -->|"Quit: q or Ctrl-C"| Q(["drop: leave alternate screen,<br/>restore termios"])
   A -->|"line, page, half page, top, bottom"| CL["View::apply<br/>clamp to 0 .. max_top"]
   A -->|"/ or ?"| OP["open the prompt"]
@@ -268,12 +280,16 @@ flowchart TD
   A -->|"o"| OO["open the outline<br/>on the current section"]
   A -->|"h l, Left Right"| SW["left column by half a window,<br/>up to the widest line"]
   A -->|"Esc"| CS["clear the search"]
+  A -->|"Tab or Shift-Tab"| LINK["select_link<br/>cycle resolvable internal links,<br/>show label and Enter follow"]
+  A -->|"Backspace"| BACK["restore saved internal-jump view"]
   CL --> D
   OP --> D
   ST --> D
   OO --> D
   SW --> D
   CS --> D
+  LINK --> D
+  BACK --> D
 ```
 
 - `src/pager/mod.rs:Session::open` · `run` · `drop`
@@ -281,6 +297,7 @@ flowchart TD
 - `src/pager/mod.rs:wait_for_input` select
 - `src/pager/keys.rs:parse_keys` · `normal_action` · `escape_action`
 - `src/pager/mod.rs:Pager::handle` · `run_search` · `step` · `jump` · `relayout`
+- `src/pager/mod.rs:Pager::set_navigation` · `select_link` · `follow_link`
 - `src/pager/mod.rs:View::apply` · `View::resize` · `cut_left` · `status_line`
 - `src/pager/search.rs:Search` · `highlight` · `strip_sgr`
 - `src/pager/outline.rs:Outline::open` · `apply` · `follow`

@@ -32,17 +32,19 @@ cargo fmt --check && cargo test --release && cargo clippy --all-targets -- -D wa
 | `tests/code.rs` | Source files shown verbatim, never read as Markdown |
 | `tests/man.rs` | Man pages with `man` and `mdoc` macros, exact output and the outline |
 | `tests/jupyter.rs` | Notebooks: cells, every kind of output, the outline and the JSON fallback |
-| `tests/epub.rs` | Books zipped from parts by the test: spine order, metadata, inlined and missing images, the outline, file and stdin |
+| `tests/epub.rs` | Books zipped from parts by the test: spine order, metadata, images, the outline, chapter-scoped paths/fragments, unresolved targets, file and stdin |
 | `tests/pdf.rs` | A hand-written two-page PDF through `pdftotext`, skipped without it, plus the missing-tool error |
 | `tests/outline.rs` | Recorded headings point at the lines that show them, in every document format and across widths |
 | `tests/sniff.rs` | Sniffs every fixture against every format, so one format's rule can't quietly claim another's files |
 | `tests/cli_detect.rs` | `--format` through the CLI, and unknown names rejected |
 | `tests/images.rs` | Image loading, fitting and fallbacks |
+| `tests/links.rs` | Public hyperlink rendering, label/fallback behavior and internal EPUB navigation metadata |
+| `tests/links_cli.rs` | Real CLI flag parsing, forced/disabled hyperlinks and color/environment independence |
 | `tests/url.rs` | URL fetching, run against a local server |
-| `src/pager/` unit tests | Key decoding, scroll clamping, search, the outline, sideways cutting, resize behaviour and the status bar |
-| `tests/pager_pty.rs` | The real pager in a pseudo-terminal: resizing, search, the outline and sideways scrolling |
+| `src/pager/` unit tests | Key decoding, scroll clamping, search, the outline, internal navigation, OSC 8-aware sideways cutting, resize behaviour and the status bar |
+| `tests/pager_pty.rs` | The real pager in a pseudo-terminal: resizing, search, the outline, sideways scrolling, OSC 8 policy/cleanup and EPUB chapter jumps |
 
-The invariant sweeps check that no line exceeds the width, that color output with SGR stripped equals plain output, that every styled line resets before its newline, and that no control character from the input reaches the output. See [Safety & invariants](/wiki/safety#invariants).
+The invariant sweeps check that no line exceeds the width, that color output with SGR stripped equals plain output at a fixed hyperlink policy, that every styled line resets before its newline, and that no control character from the input reaches the output. Hyperlink regressions cover label/fallback behavior, navigation metadata and OSC 8 state through paging. CLI subprocesses and PTYs prove emitted bytes and pager behavior, not whether a desktop emulator activates a mouse click. See [Safety & invariants](/wiki/safety#invariants).
 
 Fixtures live in `tests/fixtures/`: `kitchen-sink.md`, one or more `sample.*` per format (`sample.plist` and `sample.rss` for XML, `sample.c` and `sample.sh` for source code, `sample.pdf` for PDF), and `images/`. The zip reader and EPUB converter have unit tests in `src/book/`.
 

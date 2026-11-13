@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use pulldown_cmark::Alignment;
 
-use crate::inline::{Inline, Line, measure, wrap};
+use crate::inline::{Inline, Line, measure, text_width, wrap};
 use crate::style::{STYLE_FRAME, Style, paint};
 
 // Narrowest a column may be squeezed to before the table is allowed to overflow
@@ -72,7 +72,7 @@ pub fn render(
     limit: usize,
     min_column: usize,
     color: bool,
-) -> Vec<String> {
+) -> Vec<Line> {
     let longest_row = table
         .rows
         .iter()
@@ -127,7 +127,7 @@ fn fit_columns(widths: &mut [usize], budget: usize, min_column: usize) {
 }
 
 // Draw a horizontal border with junctions between columns
-fn border(widths: &[usize], pieces: [&str; 3], color: bool) -> String {
+fn border(widths: &[usize], pieces: [&str; 3], color: bool) -> Line {
     let mut plain = String::from(pieces[0]);
     for (column, width) in widths.iter().enumerate() {
         if column > 0 {
@@ -140,12 +140,16 @@ fn border(widths: &[usize], pieces: [&str; 3], color: bool) -> String {
     plain.push_str(pieces[2]);
     let mut line = String::new();
     paint(&mut line, &plain, STYLE_FRAME, color);
-    line
+    Line {
+        text: line,
+        width: text_width(&plain),
+        ..Line::default()
+    }
 }
 
 // Wrap every cell in a row and draw the row as one or more lines
 fn draw_row(
-    lines: &mut Vec<String>,
+    lines: &mut Vec<Line>,
     row: &Row,
     widths: &[usize],
     aligns: &[Alignment],
@@ -169,8 +173,10 @@ fn draw_row(
     let height = wrapped.iter().map(Vec::len).max().unwrap_or(0).max(1);
 
     for line_index in 0..height {
-        let mut line = String::new();
-        paint(&mut line, BORDER_SIDE, STYLE_FRAME, color);
+        let mut rendered = Line::default();
+        let line = &mut rendered.text;
+        paint(line, BORDER_SIDE, STYLE_FRAME, color);
+        let mut column_start = 1;
         for (column, cell_lines) in wrapped.iter().enumerate() {
             let (text, width) = cell_lines.get(line_index).map_or(("", 0), |cell_line| {
                 (cell_line.text.as_str(), cell_line.width)
@@ -181,14 +187,27 @@ fn draw_row(
                 Some(Alignment::Center) => (gap / 2, gap - gap / 2),
                 _ => (0, gap),
             };
+            if let Some(cell) = cell_lines.get(line_index) {
+                let offset = column_start + 1 + left;
+                rendered.anchors.extend(
+                    cell.anchors
+                        .iter()
+                        .map(|(id, at)| (id.clone(), offset + at)),
+                );
+                rendered
+                    .links
+                    .extend(cell.links.iter().map(|(id, at)| (*id, offset + at)));
+            }
             line.push(' ');
-            push_spaces(&mut line, left);
+            push_spaces(line, left);
             line.push_str(text);
-            push_spaces(&mut line, right);
+            push_spaces(line, right);
             line.push(' ');
-            paint(&mut line, BORDER_SIDE, STYLE_FRAME, color);
+            paint(line, BORDER_SIDE, STYLE_FRAME, color);
+            column_start += widths[column] + CELL_PADDING + 1;
         }
-        lines.push(line);
+        rendered.width = widths.iter().sum::<usize>() + widths.len() * (CELL_PADDING + 1) + 1;
+        lines.push(rendered);
     }
 }
 

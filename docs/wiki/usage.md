@@ -30,6 +30,7 @@ Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL.
 | `--toc` | Print the document's outline and exit. See [Outline](#toc). |  |
 | `-w`, `--width <N>` | Wrap at N columns, minimum 20. | terminal width, capped at 100 except for CSV and TSV |
 | `--color <WHEN>` | `auto`, `always` or `never`. | `auto`, honours `NO_COLOR` |
+| `--links <WHEN>` | `auto`, `always` or `never`; controls external OSC 8 hyperlinks, not EPUB chapter jumps. | `auto`, recognized styled terminals only |
 | `--paging <WHEN>` | `auto`, `always` or `never`. | `auto` |
 | `-h`, `--help` | Print usage. |  |
 | `-V`, `--version` | Print `mu X.Y.Z`. |  |
@@ -48,7 +49,27 @@ The curl-like options (`-H -X -d -A -u -k -i -I --timeout --curl --no-rewrite`) 
 
 - `auto`: color is on when stdout is a terminal and `NO_COLOR` is unset or empty.
 - `always` keeps styling when piping elsewhere, for example into `less -R`.
-- `never` gives plain text. Turning color off also turns images off, so each image shows its `[image: alt]` text.
+- `never` disables SGR styling. Turning color off also turns images off, so each image shows its `[image: alt]` text. Explicit `--links always` still emits OSC 8 hyperlinks; use `--links never` as well for escape-free document text.
+
+## Links {#links}
+
+`--links auto|always|never` controls terminal OSC 8 hyperlinks for semantic document links:
+
+- `auto` needs terminal stdout, color enabled, and a recognized environment. Unknown terminals and output to a pipe or file retain printed URLs.
+- `always` is an explicit override, independent of `--color never`, `NO_COLOR` and terminal detection. It also emits OSC 8 when output is piped; only use it where the destination understands that protocol.
+- `never` emits no OSC 8. It does **not** disable the pager's [EPUB chapter navigation](/wiki/pager#chapter-links).
+
+Auto recognizes these exact environment markers, rather than probing the terminal:
+
+| Marker | Accepted value |
+|---|---|
+| `TERM` | `xterm-kitty` or `xterm-ghostty` |
+| `TERM_PROGRAM` | `iTerm.app`, `WezTerm` or `ghostty` |
+| `VTE_VERSION` | Nonempty digits only, parsing as `u32` and at least `5000` |
+
+Any one marker is sufficient, but a set `TMUX` or `STY`, `TERM=dumb`, or a `TERM` starting with `screen` or `tmux` disables auto regardless of the others. This is a conservative heuristic, not a capability handshake or a guarantee about an emulator's mouse gesture. mu sends no capability query and starts no detector subprocess.
+
+A usable absolute HTTP(S)/mailto link shows its label without a redundant `(URL)` suffix; otherwise the existing printed-URL fallback remains, with no repeated autolinks. Literal control characters and unsupported or unsafe destinations are rejected before URI encoding. The ASCII URI payload is bounded at 8192 encoded bytes. Relative paths and fragments outside EPUB are not resolved, and `--base` remains image-only. URLs in source files, code blocks and data are not auto-linkified. See [Rendering](/wiki/rendering#links) and [Safety](/wiki/safety#hyperlinks).
 
 ## Paging {#paging}
 
@@ -65,6 +86,7 @@ The curl-like options (`-H -X -d -A -u -k -i -I --timeout --curl --no-rewrite`) 
   <bl>Install</bl>
   <bl>Usage</bl>
   <bl>URLs</bl>
+  <bl>Links</bl>
   <bl>Pager</bl>
   <bl>Formats</bl>
 ```
@@ -90,6 +112,12 @@ mu --paging never CHANGELOG.md | grep -i fix
 
 # Keep colors through another pager
 mu --color always README.md | less -R
+
+# Force external hyperlinks without color, for an OSC 8-capable terminal
+mu --links always --color never notes.md
+
+# EPUB chapter jumps still work: Tab / Shift-Tab, Enter, Backspace
+mu --paging always --links never --color never book.epub
 
 # A .txt file that is really reStructuredText
 mu -f rst docs/index.txt

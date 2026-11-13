@@ -5,7 +5,7 @@ order: 0
 summary: mu is the markup/markdown utility. It reads a file, stdin or a URL, works out the format, and prints styled, wrapped output for Markdown, HTML, reStructuredText, Org, AsciiDoc, man pages, Jupyter notebooks, EPUB books, PDF, JSON, YAML, TOML, XML, CSV and TSV, and shows source code as written.
 ---
 
-```term notes.md — mu
+```term notes.md — mu --links never
 <m>Release notes</m>
 <m>═════════════</m>
 
@@ -31,8 +31,9 @@ See <b>the docs</b> <d>(https://github.com/machinageist/mu)</d>.
 - **Data** in JSON, YAML, TOML and XML gets token coloring. Valid JSON is re-indented as well, and so is XML whose structure allows it, including plists, SVG source and RSS or Atom feeds.
 - **Tables** in CSV and TSV are drawn with box borders, a header row and right-aligned numbers. A CSV's delimiter is detected.
 - **Source code** is shown verbatim, line for line, rather than read as Markdown.
-- **Books and papers.** An EPUB reads as one document with its pictures, and a PDF shows its text as laid out on the page, through poppler's `pdftotext`.
+- **Books and papers.** An EPUB reads as one document with its pictures and [keyboard chapter links](/wiki/pager#chapter-links), and a PDF shows its text as laid out on the page, through poppler's `pdftotext`.
 - **URLs** are fetched with the system `curl` and presented like files. GitHub, GitLab and Gist page URLs become their raw files.
+- **Links** use OSC 8 for eligible absolute HTTP(S)/mailto document targets on recognized styled terminals, with printed URLs as fallback. [The link policy](/wiki/usage#links) is controlled by `--links auto|always|never`; EPUB chapter jumps work even with `--links never` or color off.
 - **Images** standing alone in a document are drawn in the terminal with an exact aspect ratio.
 - **A pager is built in.** Documents taller than the screen open in it automatically. It searches with `/` and `?`, lists headings with `o`, and scrolls wide tables sideways with `h` and `l`.
 - **Outlines.** `mu --toc FILE` prints a document's headings, indented by level.

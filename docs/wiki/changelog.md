@@ -9,7 +9,17 @@ Every notable change, following [Keep a Changelog 1.1.0](https://keepachangelog.
 
 ## Unreleased {#unreleased}
 
-Changes merged since 0.8.1, not yet in a release.
+Changes since 0.8.1, not yet in a release.
+
+### Added {#unreleased-added}
+
+- OSC 8 hyperlinks for semantic document links, controlled by `--links auto|always|never` (default `auto`). Recognized styled terminals show clickable labels without a redundant URL suffix; other environments retain printed URLs. `always` works independently of `--color never` and `NO_COLOR`. Only validated absolute HTTP(S)/mailto targets qualify, with ASCII URI payloads bounded to 8192 encoded bytes; source, code and data URLs are not auto-linkified
+- EPUB chapter navigation in the pager: `Tab` / `Shift-Tab` select internal links, `Enter` follows and `Backspace` returns, including with `--links never` or color off. Relative chapter paths and chapter-scoped fragments resolve to rendered lines through reflow; unresolved targets remain readable but cannot jump. No external opener, network request or invented ZIP-member file URI is used
+- Library: explicit `Options.links: bool` defaults to `false`; `present_outlined` returns `Rendered { text, headings, anchors, links }` with `Anchor { id, line, column }` and `NavigationLink { target, label, line, column }` metadata for internal EPUB navigation
+
+### Fixed {#unreleased-fixed}
+
+- EPUB extraction keeps XML literals, instructions and image alt text from creating markup actions. Hidden IDs, empty chapters and trailing anchors cannot point at unrelated content; ambiguous repaired internal destinations remain inactive
 
 ## 0.8.1 · 2026-11-12 {#v0-8-1}
 

@@ -13,7 +13,9 @@ What mu deliberately leaves out, what it doesn't do yet, and how fast it is.
 
 - Syntax highlighting is lexical, from small built-in lexers, with no grammar: heredocs, string interpolation and regex literals aren't picked out, and a name's role is guessed from its spelling. Code blocks and source files in an unknown language stay plain.
 - Vue and Svelte source uses the XML/HTML highlighter for markup; embedded JavaScript and CSS do not get separate language lexing. PDF page text, table cells and unlabelled prose are not guessed to be source code.
-- Links aren't clickable (no OSC 8 hyperlinks). The URL is printed instead.
+- External hyperlink activation requires an OSC 8-capable terminal. [Auto detection](/wiki/usage#links) is conservative: unknown environments and multiplexer paths retain printed URLs. `--links always` overrides detection, but cannot add support to the destination terminal.
+- Only validated absolute HTTP(S)/mailto document links emit OSC 8, with URI payloads bounded to 8192 encoded bytes. Relative links outside EPUB, local files and unsupported/unsafe targets stay non-actionable; source/code/data URLs are not auto-linkified.
+- URI authority validation is structural, not DNS/IDNA or mailbox verification. Scoped IPv6 and IPvFuture literals conservatively retain printed fallback, as do destinations containing a replacement character after parser/UTF-8 repair.
 - Definition lists, math and wiki links aren't enabled in Markdown; they render as plain text.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.
 - A table with too many columns to fit at 3 columns each (10 for CSV and TSV) overflows the width rather than becoming unreadable. The pager scrolls it sideways.
@@ -32,6 +34,7 @@ What mu deliberately leaves out, what it doesn't do yet, and how fast it is.
 ### Pager, images and URLs {#limits-other}
 
 - Pager search is a literal substring match, not a regular expression, and a match never spans two lines.
+- EPUB chapter links use [keyboard navigation](/wiki/pager#chapter-links), not emulator mouse clicks or invented ZIP-member file URIs. Missing chapters, missing or hidden fragments and unresolved targets stay non-jumpable; external links use the terminal's OSC 8 support instead.
 - Images: no EXIF orientation for JPEGs, no animated GIFs, no SVG text, and no images inline within a line of text.
 - URLs: no caching between runs, and charsets other than UTF-8 are shown with replacement characters. A repository's front page is fetched as HTML; point at the README's blob URL instead.
 

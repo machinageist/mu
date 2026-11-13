@@ -15,7 +15,7 @@ The Markdown mapping is the reference. The other document formats map their equi
 | `###`–`######` | Bold, a distinct color per level |
 | `**bold**` `*italic*` `~~strike~~` | SGR bold / italic / strikethrough |
 | `` `code` `` | Yellow |
-| `[text](url)` | Underlined blue text, then the URL dimmed in parentheses. Autolinks are not repeated |
+| `[text](url)` | Underlined blue text when color is on; an OSC 8 label when enabled and valid, otherwise the URL dimmed in parentheses. Autolinks are not repeated |
 | `![alt](src)` | A drawn picture when it stands alone, else `[image: alt]`. See [Images](/wiki/images) |
 | Lists | `•` `◦` `▪` by depth, numbers for ordered lists. Wrapped lines align under the text, and tight lists stay tight |
 | `- [ ]` / `- [x]` | `☐` / `☑` in place of the bullet |
@@ -65,7 +65,21 @@ Real output of `mu -w 52` on a short document. Note the `┆` where the long cod
 - **Wide glyphs**: CJK and emoji are measured by display width (`unicode-width`), not byte or char count.
 - **Code blocks**: highlighted by the language in the info string, as below. A block in an unknown language stays plain.
 - **Headings** are recorded with their level, text and first output line, for the pager's [outline](/wiki/pager#outline) and `--toc`. Outline labels are independent of wrapping, so resizing never inserts spaces inside long words.
-- **Links**: the URL is printed after the text. Links are not clickable, since mu doesn't emit OSC 8 hyperlinks.
+- **Links**: eligible external links use OSC 8 when enabled, otherwise retain printed URLs. Internal EPUB links use [keyboard chapter navigation](/wiki/pager#chapter-links), not OSC 8.
+
+## Links {#links}
+
+The shared document renderer emits OSC 8 for semantic links to validated absolute `http`, `https` or `mailto` destinations when [the link policy](/wiki/usage#links) enables it. The label becomes the hyperlink, without a redundant `(URL)` suffix. For example, `[the guide](https://example.com/guide)` shows `the guide` with OSC 8, or `the guide (https://example.com/guide)` without it. Autolinks are not repeated; an empty external label outside HTML/EPUB headings still exposes its destination. Empty heading anchors remain invisible rather than creating outline noise.
+
+This applies to link markup from Markdown, HTML, reStructuredText, Org, AsciiDoc, man-page source, Jupyter Markdown cells/outputs and EPUB chapters. URLs merely appearing in source files, code blocks or data are not auto-linkified. Relative paths, local files, fragments outside EPUB and unsupported or unsafe targets stay non-actionable; image `--base` settings do not resolve them. Existing HTML heading-fragment cleanup still omits decorative permalinks and fragment suffixes.
+
+- The emulator decides how external links are activated, for example with Ctrl-click; mu does not open or fetch them. Auto detection is conservative and does not prove a live emulator's click behavior.
+- `--links always` enables OSC 8 even with `--color never` or `NO_COLOR`. SGR styling affects appearance, not the resolved hyperlink destination. At a fixed hyperlink policy, turning SGR off changes neither visible text nor layout; changing link policy can restore or remove the URL suffix.
+- Payloads are ASCII URIs, percent-encoding Unicode and unsafe URI bytes, bounded to 8192 encoded bytes. Controls and unsupported targets are rejected before encoding; see [Safety](/wiki/safety#hyperlinks).
+- Wrapped and clipped labels keep their destination. Every line closes OSC 8 before its newline, and link state excludes padding, gutters, table borders and status bars. Mixed inline styles and search highlighting do not expose hidden URI bytes as text.
+- Images inside active external or internal links keep their actionable `[image: alt]` text rather than losing their destination in a standalone picture.
+
+EPUB internal links show their labels without ZIP paths or generated anchor IDs. The pager follows resolved chapter paths/fragments with `Tab` / `Shift-Tab`, `Enter` and `Backspace`, including with `--links never`. Unresolved targets stay readable but non-jumpable. These are not emulator mouse clicks, and require no external opener, network access or invented ZIP-member file URIs.
 
 ## Syntax highlighting {#highlighting}
 
@@ -90,7 +104,7 @@ Source files and fenced code blocks are highlighted when color is on. Keywords, 
 
 ### HTML heading cleanup {#html-headings}
 
-Documentation permalinks such as `¶`, `§` and link icons are omitted from headings and outlines. Fragment links wrapping real heading text keep the text and its inline styles without appending `(#fragment)`. External heading links, and links in ordinary paragraphs or tables, still print their destinations. Missing or mismatched heading tags recover without consuming later sections, and headings inside hidden templates do not suppress the page-title fallback.
+Documentation permalinks such as `¶`, `§` and link icons are omitted from headings and outlines. Fragment links wrapping real heading text keep the text and its inline styles without appending `(#fragment)`. External heading links, and links in ordinary paragraphs or tables, follow [the link policy](#links), retaining printed destinations when OSC 8 is disabled or ineligible. Missing or mismatched heading tags recover without consuming later sections, and headings inside hidden templates do not suppress the page-title fallback.
 
 Only recognizable decorative-link classes or a heading's own permalink identify a symbol as decoration. Linked code symbols such as `#`, links to other sections, and all-symbol titles keep their text.
 
@@ -98,4 +112,4 @@ Only recognizable decorative-link classes or a heading's own permalink identify 
 
 Text uses only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it. The only 24-bit colors mu writes are for half-block image pixels.
 
-Styles are emitted lazily and every line closes its own style. That's what lets the pager draw any window of lines on its own.
+Styles are emitted lazily and every line closes its own style and hyperlink. That's what lets the pager draw any window of lines on its own.

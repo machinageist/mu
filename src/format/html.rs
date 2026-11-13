@@ -9,6 +9,7 @@ use pulldown_cmark::{
 };
 
 use crate::highlight;
+use crate::render::DocumentEvent;
 
 // Byte order mark allowed before the document
 const BOM: char = '\u{feff}';
@@ -116,6 +117,7 @@ const HEADING_PERMALINK_CLASSES: [&str; 4] = ["headerlink", "doc-anchor", "ancho
 // Attributes the walker reads
 const HREF: &str = "href";
 const ID: &str = "id";
+const NAME: &str = "name";
 const SRC: &str = "src";
 const ALT: &str = "alt";
 const CLASS: &str = "class";
@@ -256,15 +258,32 @@ pub fn sniff(head: &str) -> bool {
     })
 }
 
-// Translate HTML into document events
+// Keep the unannotated stream used by other document adapters unchanged.
 pub fn events(input: &str) -> Vec<Event<'_>> {
+    document_events(input, false)
+        .into_iter()
+        .filter_map(|event| match event {
+            DocumentEvent::Markup(event) => Some(event),
+            DocumentEvent::Anchor(_) | DocumentEvent::ChapterStart | DocumentEvent::ChapterEnd => {
+                None
+            }
+        })
+        .collect()
+}
+
+// Preserve HTML identities separately from markup and link destinations.
+pub(crate) fn annotated_events(input: &str) -> Vec<DocumentEvent<'static>> {
+    document_events(input, true)
+}
+
+fn document_events(input: &str, annotated: bool) -> Vec<DocumentEvent<'static>> {
     let root = parse(input);
-    let mut out = Vec::new();
+    let mut out = Events::new(annotated);
     // The title stands in for a missing top-level heading
     if find(&root, H1).is_none()
         && let Some(title) = find(&root, TITLE)
     {
-        let mut run = Run::default();
+        let mut run = Run::new(annotated);
         run.text(&text_of(title));
         if let Some(events) = run.finish() {
             out.push(Event::Start(heading_tag(HeadingLevel::H1)));
@@ -273,7 +292,7 @@ pub fn events(input: &str) -> Vec<Event<'_>> {
         }
     }
     block(&root.children, true, None, &mut out);
-    out
+    out.items
 }
 
 // Compare a prefix ignoring ASCII case
@@ -667,6 +686,62 @@ fn start_tag(input: &str, lt: usize, builder: &mut Builder) -> usize {
     }
 }
 
+// Event collection keeps annotations typed; the legacy path never inserts them.
+#[derive(Default)]
+struct Events {
+    items: Vec<DocumentEvent<'static>>,
+    annotated: bool,
+}
+
+impl Events {
+    fn new(annotated: bool) -> Self {
+        Self {
+            annotated,
+            ..Self::default()
+        }
+    }
+
+    fn push(&mut self, event: Event<'static>) {
+        self.items.push(DocumentEvent::Markup(event));
+    }
+
+    fn extend(&mut self, events: Self) {
+        self.items.extend(events.items);
+    }
+
+    fn anchor(&mut self, element: &Element) {
+        if self.annotated {
+            self.items
+                .extend(anchor_names(element).map(|id| DocumentEvent::Anchor(id.to_owned())));
+        }
+    }
+}
+
+fn anchor_names(element: &Element) -> impl Iterator<Item = &str> {
+    element
+        .attr(ID)
+        .into_iter()
+        .chain((element.name == A).then(|| element.attr(NAME)).flatten())
+        .filter(|id| !id.is_empty())
+}
+
+// Extraction reserves these div IDs for chapter wrappers; source IDs are rewritten
+// with an additional `-id-` component and cannot introduce a chapter boundary.
+fn chapter_wrapper(element: &Element) -> bool {
+    element.name == "div"
+        && element
+            .attr(ID)
+            .and_then(|id| id.strip_prefix("epub-"))
+            .and_then(|id| id.strip_suffix("-top"))
+            .is_some_and(|path| {
+                !path.is_empty()
+                    && path.len().is_multiple_of(2)
+                    && path
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+}
+
 struct HeadingContext {
     id: Option<String>,
     only_symbol: bool,
@@ -675,7 +750,8 @@ struct HeadingContext {
 // Collects inline events with collapsed whitespace and no leading or trailing breaks
 #[derive(Default)]
 struct Run {
-    events: Vec<Event<'static>>,
+    events: Events,
+    anchors: Vec<String>,
     buf: String,
     space: bool,
     brk: bool,
@@ -685,6 +761,35 @@ struct Run {
 }
 
 impl Run {
+    fn new(annotated: bool) -> Self {
+        Self {
+            events: Events::new(annotated),
+            ..Self::default()
+        }
+    }
+
+    fn take(&mut self) -> Self {
+        let annotated = self.events.annotated;
+        std::mem::replace(self, Self::new(annotated))
+    }
+
+    // Wait for the next visible atom so collapsed spaces and breaks precede its anchors.
+    fn anchor(&mut self, element: &Element) {
+        if self.events.annotated {
+            self.anchors
+                .extend(anchor_names(element).map(str::to_owned));
+        }
+    }
+
+    fn flush_anchors(&mut self) {
+        if !self.anchors.is_empty() {
+            self.flush();
+            self.events
+                .items
+                .extend(self.anchors.drain(..).map(DocumentEvent::Anchor));
+        }
+    }
+
     // Add text, collapsing whitespace runs into single spaces
     fn text(&mut self, text: &str) {
         if text.starts_with(|ch: char| ch.is_ascii_whitespace()) {
@@ -713,6 +818,7 @@ impl Run {
         }
         self.brk = false;
         self.space = false;
+        self.flush_anchors();
     }
 
     // Emit buffered text as one event
@@ -760,9 +866,15 @@ impl Run {
     }
 
     // Return the events, or nothing when the run holds nothing visible
-    fn finish(mut self) -> Option<Vec<Event<'static>>> {
+    fn finish(mut self) -> Option<Events> {
         self.flush();
-        self.content.then_some(self.events)
+        self.flush_anchors();
+        if !self.content {
+            self.events
+                .items
+                .retain(|event| matches!(event, DocumentEvent::Anchor(_)));
+        }
+        (!self.events.items.is_empty()).then_some(self.events)
     }
 }
 
@@ -777,7 +889,8 @@ fn heading_tag(level: HeadingLevel) -> Tag<'static> {
 }
 
 // Emit a finished run, wrapped in a paragraph when asked
-fn flush_run(run: Run, wrap: bool, out: &mut Vec<Event<'static>>) {
+fn flush_run(run: Run, wrap: bool, out: &mut Events) {
+    let wrap = wrap && run.content;
     let Some(events) = run.finish() else {
         return;
     };
@@ -795,9 +908,9 @@ fn block<'n>(
     nodes: impl IntoIterator<Item = &'n Node>,
     wrap: bool,
     inherited_language: Option<&str>,
-    out: &mut Vec<Event<'static>>,
+    out: &mut Events,
 ) {
-    let mut run = Run::default();
+    let mut run = Run::new(out.annotated);
     for node in nodes {
         let element = match node {
             Node::Text(text) => {
@@ -814,7 +927,7 @@ fn block<'n>(
             inline_element(element, &mut run, false);
             continue;
         }
-        flush_run(std::mem::take(&mut run), wrap, out);
+        flush_run(run.take(), wrap, out);
         block_element(element, wrap, language(element).or(inherited_language), out);
     }
     flush_run(run, wrap, out);
@@ -825,8 +938,13 @@ fn block_element(
     element: &Element,
     wrap: bool,
     inherited_language: Option<&str>,
-    out: &mut Vec<Event<'static>>,
+    out: &mut Events,
 ) {
+    let chapter = out.annotated && chapter_wrapper(element);
+    if chapter {
+        out.items.push(DocumentEvent::ChapterStart);
+    }
+    out.anchor(element);
     let name = element.name.as_str();
     if let Some((_, level)) = HEADINGS.iter().find(|(tag, _)| *tag == name) {
         let mut run = Run {
@@ -839,19 +957,24 @@ fn block_element(
                             .any(|label| label.contains(ch))
                 }),
             }),
-            ..Run::default()
+            ..Run::new(out.annotated)
         };
         inline_nodes(&element.children, &mut run, true);
+        let visible = run.content;
         if let Some(events) = run.finish() {
-            out.push(Event::Start(heading_tag(*level)));
+            if visible {
+                out.push(Event::Start(heading_tag(*level)));
+            }
             out.extend(events);
-            out.push(Event::End(TagEnd::Heading(*level)));
+            if visible {
+                out.push(Event::End(TagEnd::Heading(*level)));
+            }
         }
         return;
     }
     match name {
         P => {
-            let mut run = Run::default();
+            let mut run = Run::new(out.annotated);
             inline_nodes(&element.children, &mut run, false);
             flush_run(run, true, out);
         }
@@ -866,6 +989,9 @@ fn block_element(
         TABLE => table(element, out),
         DL => definitions(element, inherited_language, out),
         _ => block(&element.children, wrap, inherited_language, out),
+    }
+    if chapter {
+        out.items.push(DocumentEvent::ChapterEnd);
     }
 }
 
@@ -886,7 +1012,7 @@ fn styled(element: &Element, run: &mut Run, flat: bool, start: Tag<'static>, end
     run.close(end);
 }
 
-// EPUB removes internal hrefs, but keeps the classes on decorative heading links.
+// Decorative heading links do not contribute a label to the heading.
 fn heading_permalink(element: &Element, heading: &HeadingContext) -> bool {
     if heading.only_symbol {
         return false;
@@ -908,15 +1034,30 @@ fn heading_permalink(element: &Element, heading: &HeadingContext) -> bool {
             .any(|tag| find(element, tag).is_some())
 }
 
+// Empty heading links are identities/decorations, but an image is a visible label
+// even without alt text. Hidden descendants must not make either kind visible.
+fn inline_content(element: &Element) -> bool {
+    element.children.iter().any(|node| match node {
+        Node::Text(text) => !text.trim_ascii().is_empty(),
+        Node::Element(child) if !DROPPED.contains(&child.name.as_str()) => {
+            child.name == IMG || inline_content(child)
+        }
+        Node::Element(_) => false,
+    })
+}
+
 // Map one element inside inline content; flat turns breaks and blocks into spaces
 fn inline_element(element: &Element, run: &mut Run, flat: bool) {
     let name = element.name.as_str();
-    if DROPPED.contains(&name)
-        || (name == A
-            && run
-                .heading
-                .as_ref()
-                .is_some_and(|heading| heading_permalink(element, heading)))
+    if DROPPED.contains(&name) {
+        return;
+    }
+    run.anchor(element);
+    if name == A
+        && run
+            .heading
+            .as_ref()
+            .is_some_and(|heading| heading_permalink(element, heading))
     {
         return;
     }
@@ -930,13 +1071,19 @@ fn inline_element(element: &Element, run: &mut Run, flat: bool) {
             Tag::Strikethrough,
             TagEnd::Strikethrough,
         ),
+        CODE | KBD | SAMP | TT if run.events.annotated => code_span(element, run),
         CODE | KBD | SAMP | TT => {
             let text = text_of(element);
             let words: Vec<&str> = text.split_ascii_whitespace().collect();
             run.code(words.join(WORD_GAP));
         }
+        A if run.heading.is_some() && !inline_content(element) => {
+            inline_nodes(&element.children, run, flat);
+        }
         A => match element.attr(HREF) {
-            Some(href) if run.heading.is_some() && href.starts_with('#') => {
+            Some(href)
+                if !run.events.annotated && run.heading.is_some() && href.starts_with('#') =>
+            {
                 inline_nodes(&element.children, run, flat);
             }
             Some(href) => {
@@ -947,6 +1094,17 @@ fn inline_element(element: &Element, run: &mut Run, flat: bool) {
                     id: CowStr::Borrowed(""),
                 };
                 styled(element, run, flat, tag, TagEnd::Link);
+                // An empty external label still prints its destination in the renderer.
+                // Identity/permalink-only anchors must not create visible runs or headings.
+                if run.heading.is_none()
+                    && href.trim().split_once(':').is_some_and(|(scheme, _)| {
+                        ["http", "https", "mailto"]
+                            .iter()
+                            .any(|external| scheme.eq_ignore_ascii_case(external))
+                    })
+                {
+                    run.content = true;
+                }
             }
             None => inline_nodes(&element.children, run, flat),
         },
@@ -972,6 +1130,48 @@ fn inline_element(element: &Element, run: &mut Run, flat: bool) {
     }
 }
 
+// Flatten code formatting while preserving descendant identities at normalized text offsets.
+fn code_span(element: &Element, run: &mut Run) {
+    fn collect(nodes: &[Node], run: &mut Run) {
+        for node in nodes {
+            match node {
+                Node::Text(text) => run.text(text),
+                Node::Element(child) if !DROPPED.contains(&child.name.as_str()) => {
+                    run.anchor(child);
+                    collect(&child.children, run);
+                }
+                Node::Element(_) => {}
+            }
+        }
+    }
+    let mut code = Run::new(true);
+    collect(&element.children, &mut code);
+    let visible = code.content;
+    let Some(mut events) = code.finish() else {
+        return;
+    };
+    if !visible {
+        run.anchors
+            .extend(events.items.into_iter().filter_map(|event| match event {
+                DocumentEvent::Anchor(id) => Some(id),
+                DocumentEvent::Markup(_)
+                | DocumentEvent::ChapterStart
+                | DocumentEvent::ChapterEnd => None,
+            }));
+        return;
+    }
+    run.lead();
+    run.flush();
+    for event in &mut events.items {
+        if let DocumentEvent::Markup(Event::Text(text)) = event {
+            *event =
+                DocumentEvent::Markup(Event::Code(std::mem::replace(text, CowStr::Borrowed(""))));
+        }
+    }
+    run.events.extend(events);
+    run.content = true;
+}
+
 // Check whether an item's content needs paragraphs, as a loose list item does
 fn needs_paragraphs<'n>(nodes: impl IntoIterator<Item = &'n Node>) -> bool {
     nodes.into_iter().any(|node| match node {
@@ -983,8 +1183,16 @@ fn needs_paragraphs<'n>(nodes: impl IntoIterator<Item = &'n Node>) -> bool {
 }
 
 // Emit one list item around block content
-fn item(nodes: &[&Node], inherited_language: Option<&str>, out: &mut Vec<Event<'static>>) {
+fn item(
+    element: Option<&Element>,
+    nodes: &[&Node],
+    inherited_language: Option<&str>,
+    out: &mut Events,
+) {
     out.push(Event::Start(Tag::Item));
+    if let Some(element) = element {
+        out.anchor(element);
+    }
     block(
         nodes.iter().copied(),
         needs_paragraphs(nodes.iter().copied()),
@@ -994,27 +1202,38 @@ fn item(nodes: &[&Node], inherited_language: Option<&str>, out: &mut Vec<Event<'
     out.push(Event::End(TagEnd::Item));
 }
 
+struct ListItem<'a> {
+    nodes: Vec<&'a Node>,
+    language: Option<&'a str>,
+    element: Option<&'a Element>,
+}
+
 // Map ul or ol, attaching stray content to the item before it
-fn list(element: &Element, inherited_language: Option<&str>, out: &mut Vec<Event<'static>>) {
+fn list(element: &Element, inherited_language: Option<&str>, out: &mut Events) {
     let start = (element.name == OL).then(|| {
         element
             .attr(START)
             .and_then(|value| value.trim().parse().ok())
             .unwrap_or(DEFAULT_START)
     });
-    let mut items: Vec<(Vec<&Node>, Option<&str>)> = Vec::new();
+    let mut items: Vec<ListItem<'_>> = Vec::new();
     for node in &element.children {
         match node {
             Node::Element(child) if child.name == LI => {
-                items.push((
-                    child.children.iter().collect(),
-                    language(child).or(inherited_language),
-                ));
+                items.push(ListItem {
+                    nodes: child.children.iter().collect(),
+                    language: language(child).or(inherited_language),
+                    element: Some(child),
+                });
             }
             Node::Text(text) if text.trim_ascii().is_empty() => {}
             _ => match items.last_mut() {
-                Some((last, _)) => last.push(node),
-                None => items.push((vec![node], inherited_language)),
+                Some(last) => last.nodes.push(node),
+                None => items.push(ListItem {
+                    nodes: vec![node],
+                    language: inherited_language,
+                    element: None,
+                }),
             },
         }
     }
@@ -1022,14 +1241,14 @@ fn list(element: &Element, inherited_language: Option<&str>, out: &mut Vec<Event
         return;
     }
     out.push(Event::Start(Tag::List(start)));
-    for (nodes, language) in &items {
-        item(nodes, *language, out);
+    for entry in &items {
+        item(entry.element, &entry.nodes, entry.language, out);
     }
     out.push(Event::End(TagEnd::List(start.is_some())));
 }
 
 // Map dl as bold term paragraphs, each followed by its definitions as a list
-fn definitions(element: &Element, inherited_language: Option<&str>, out: &mut Vec<Event<'static>>) {
+fn definitions(element: &Element, inherited_language: Option<&str>, out: &mut Events) {
     let mut group: Vec<&Element> = Vec::new();
     for node in &element.children {
         match node {
@@ -1043,7 +1262,8 @@ fn definitions(element: &Element, inherited_language: Option<&str>, out: &mut Ve
         definition_list(&mut group, inherited_language, out);
         match node {
             Node::Element(child) if child.name == DT => {
-                let mut run = Run::default();
+                let mut run = Run::new(out.annotated);
+                run.anchor(child);
                 run.open(Tag::Strong);
                 inline_nodes(&child.children, &mut run, true);
                 run.close(TagEnd::Strong);
@@ -1056,18 +1276,19 @@ fn definitions(element: &Element, inherited_language: Option<&str>, out: &mut Ve
 }
 
 // Emit and clear a group of definitions
-fn definition_list(
-    group: &mut Vec<&Element>,
-    inherited_language: Option<&str>,
-    out: &mut Vec<Event<'static>>,
-) {
+fn definition_list(group: &mut Vec<&Element>, inherited_language: Option<&str>, out: &mut Events) {
     if group.is_empty() {
         return;
     }
     out.push(Event::Start(Tag::List(None)));
     for definition in group.drain(..) {
         let nodes: Vec<&Node> = definition.children.iter().collect();
-        item(&nodes, language(definition).or(inherited_language), out);
+        item(
+            Some(definition),
+            &nodes,
+            language(definition).or(inherited_language),
+            out,
+        );
     }
     out.push(Event::End(TagEnd::List(false)));
 }
@@ -1111,16 +1332,26 @@ fn nested_code_language(element: &Element) -> Option<&str> {
 }
 
 // Map pre as a fenced code block with its whitespace kept exactly
-fn code_block(element: &Element, inherited_language: Option<&str>, out: &mut Vec<Event<'static>>) {
+fn code_block(element: &Element, inherited_language: Option<&str>, out: &mut Events) {
     let lang = nested_code_language(element)
         .or(inherited_language)
         .unwrap_or_default();
-    let mut text = text_of(element);
+    let mut text = String::new();
+    let mut anchors = Vec::new();
+    if out.annotated {
+        anchored_text(element, &mut text, &mut anchors);
+    } else {
+        text = text_of(element);
+    }
     // A newline right after the opening tag is not content
     if let Some(stripped) = LEADING_NEWLINES
         .iter()
         .find_map(|newline| text.strip_prefix(newline))
     {
+        let removed = text.len() - stripped.len();
+        for (offset, _) in &mut anchors {
+            *offset = offset.saturating_sub(removed);
+        }
         text = stripped.to_owned();
     }
     if !text.is_empty() && !text.ends_with(LINE_END) {
@@ -1129,43 +1360,94 @@ fn code_block(element: &Element, inherited_language: Option<&str>, out: &mut Vec
     out.push(Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(
         CowStr::from(lang.to_owned()),
     ))));
-    if !text.is_empty() {
-        out.push(Event::Text(CowStr::from(text)));
+    let mut copied = 0;
+    for (offset, id) in anchors {
+        if offset > copied {
+            out.push(Event::Text(CowStr::from(text[copied..offset].to_owned())));
+        }
+        out.items.push(DocumentEvent::Anchor(id));
+        copied = offset;
+    }
+    if copied < text.len() {
+        out.push(Event::Text(CowStr::from(text[copied..].to_owned())));
     }
     out.push(Event::End(TagEnd::CodeBlock));
 }
 
-// Gather table rows through any row groups
-fn collect_rows<'a>(element: &'a Element, rows: &mut Vec<&'a Element>) {
+// Verbatim text offsets let code-block anchors survive newline trimming and framing.
+fn anchored_text(element: &Element, text: &mut String, anchors: &mut Vec<(usize, String)>) {
+    for node in &element.children {
+        match node {
+            Node::Text(value) => text.push_str(value),
+            Node::Element(child) if !DROPPED.contains(&child.name.as_str()) => {
+                anchors.extend(anchor_names(child).map(|id| (text.len(), id.to_owned())));
+                anchored_text(child, text, anchors);
+            }
+            Node::Element(_) => {}
+        }
+    }
+}
+
+enum TablePart<'a> {
+    Group(&'a Element),
+    Row(&'a Element),
+}
+
+// Keep row-group boundaries so their identities precede their first visible row.
+fn collect_rows<'a>(element: &'a Element, rows: &mut Vec<TablePart<'a>>) {
     for child in element.elements() {
         match child.name.as_str() {
-            TR => rows.push(child),
-            THEAD | TBODY | TFOOT => collect_rows(child, rows),
+            TR => rows.push(TablePart::Row(child)),
+            THEAD | TBODY | TFOOT => {
+                rows.push(TablePart::Group(child));
+                collect_rows(child, rows);
+            }
             _ => {}
         }
     }
 }
 
 // Map a table with its first row as the head, padding short rows
-fn table(element: &Element, out: &mut Vec<Event<'static>>) {
+fn table(element: &Element, out: &mut Events) {
     if let Some(caption) = element.elements().find(|child| child.name == CAPTION) {
-        let mut run = Run::default();
+        let mut run = Run::new(out.annotated);
+        run.anchor(caption);
         inline_nodes(&caption.children, &mut run, true);
         flush_run(run, true, out);
     }
     let mut rows = Vec::new();
     collect_rows(element, &mut rows);
-    let cells = |row: &&Element| {
+    let cells = |row: &Element| {
         row.elements()
             .filter(|child| CELLS.contains(&child.name.as_str()))
             .count()
     };
-    let columns = rows.iter().map(cells).max().unwrap_or(0);
+    let columns = rows
+        .iter()
+        .filter_map(|part| match part {
+            TablePart::Row(row) => Some(cells(row)),
+            TablePart::Group(_) => None,
+        })
+        .max()
+        .unwrap_or(0);
     if columns == 0 {
+        for part in rows {
+            let (TablePart::Group(element) | TablePart::Row(element)) = part;
+            out.anchor(element);
+        }
         return;
     }
     out.push(Event::Start(Tag::Table(vec![Alignment::None; columns])));
-    for (index, row) in rows.iter().enumerate() {
+    let mut index = 0;
+    for part in rows {
+        let row = match part {
+            TablePart::Group(group) => {
+                out.anchor(group);
+                continue;
+            }
+            TablePart::Row(row) => row,
+        };
+        out.anchor(row);
         let (start, end) = if index == 0 {
             (Tag::TableHead, TagEnd::TableHead)
         } else {
@@ -1177,7 +1459,8 @@ fn table(element: &Element, out: &mut Vec<Event<'static>>) {
             .elements()
             .filter(|child| CELLS.contains(&child.name.as_str()))
         {
-            let mut run = Run::default();
+            let mut run = Run::new(out.annotated);
+            run.anchor(cell);
             inline_nodes(&cell.children, &mut run, true);
             out.push(Event::Start(Tag::TableCell));
             out.extend(run.finish().unwrap_or_default());
@@ -1189,6 +1472,7 @@ fn table(element: &Element, out: &mut Vec<Event<'static>>) {
             out.push(Event::End(TagEnd::TableCell));
         }
         out.push(Event::End(end));
+        index += 1;
     }
     out.push(Event::End(TagEnd::Table));
 }

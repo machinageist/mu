@@ -1,12 +1,11 @@
 // Author: machinageist
 // Date: 2026-11-09
 // Description: Pager search: smart-case literal matches over the text as shown, and their highlighting
-// Notes: Lines are matched with SGR removed, by char index, so styling can never hide or split a match.
-// Highlighting only inserts SGR, so a highlighted line minus styling is still the original text
+// Notes: Lines are matched with SGR and OSC 8 removed, by char index, so hidden target bytes
+// never match. Highlighting only inserts SGR; hyperlink targets and visible text stay intact
 
+#[cfg(test)]
 const ESC: char = '\x1b';
-const CSI_OPEN: char = '[';
-const SGR_FINAL: char = 'm';
 const SGR_RESET: &str = "\x1b[0m";
 const SGR_RESET_PREFIX: &str = "0;";
 const MATCH_ON: &str = "\x1b[7m";
@@ -172,22 +171,50 @@ fn fold(ch: char, ignore_case: bool) -> char {
     }
 }
 
-// Remove SGR sequences, leaving the text as shown
-pub(super) fn strip_sgr(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == ESC && chars.peek() == Some(&CSI_OPEN) {
-            for inner in chars.by_ref() {
-                if inner == SGR_FINAL {
-                    break;
-                }
-            }
-        } else {
-            out.push(ch);
+// SGR and generated OSC 8 controls are indivisible, zero-width tokens. Keep this scanner
+// shared by search, highlighting and horizontal clipping so URI bytes never become text.
+pub(super) enum Token<'a> {
+    Sgr(&'a str),
+    Osc8(&'a str),
+    Char(char),
+}
+
+pub(super) fn tokens(text: &str) -> impl Iterator<Item = Token<'_>> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
         }
-    }
-    out
+        if let Some(csi) = rest.strip_prefix("\x1b[")
+            && let Some(end) = csi.bytes().position(|byte| (0x40..=0x7e).contains(&byte))
+            && csi.as_bytes()[end] == b'm'
+        {
+            let (sequence, tail) = rest.split_at(end + 3);
+            rest = tail;
+            return Some(Token::Sgr(sequence));
+        }
+        if let Some(osc) = rest.strip_prefix("\x1b]8;")
+            && let Some(end) = osc.find("\x1b\\")
+            && osc[..end].contains(';')
+        {
+            let (sequence, tail) = rest.split_at(end + 6);
+            rest = tail;
+            return Some(Token::Osc8(sequence));
+        }
+        let ch = rest.chars().next()?;
+        rest = &rest[ch.len_utf8()..];
+        Some(Token::Char(ch))
+    })
+}
+
+// Historical name: remove both SGR and OSC 8, leaving only the visible text.
+pub(super) fn strip_sgr(text: &str) -> String {
+    tokens(text)
+        .filter_map(|token| match token {
+            Token::Char(ch) => Some(ch),
+            Token::Sgr(_) | Token::Osc8(_) => None,
+        })
+        .collect()
 }
 
 // Re-draw a styled line with its matches in reverse video, the current one also bold
@@ -200,26 +227,26 @@ pub(super) fn highlight(line: &str, matches: &[(Match, bool)]) -> String {
     let mut out = String::with_capacity(line.len() + matches.len() * 16);
     // SGR sequences in force since the line's last reset
     let mut state = String::new();
-    let mut chars = line.chars().peekable();
     let mut index = 0;
     let mut active: Option<(Match, bool)> = None;
     let mut pending = matches.iter().copied().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == ESC && chars.peek() == Some(&CSI_OPEN) {
-            let mut sequence = String::from(ch);
-            for inner in chars.by_ref() {
-                sequence.push(inner);
-                if inner == SGR_FINAL {
-                    break;
+    for token in tokens(line) {
+        let ch = match token {
+            Token::Osc8(sequence) => {
+                // SGR resets do not affect hyperlink state. Never replay or style URI bytes.
+                out.push_str(sequence);
+                continue;
+            }
+            Token::Sgr(sequence) => {
+                out.push_str(sequence);
+                track_state(&mut state, sequence);
+                if let Some((_, current)) = active {
+                    out.push_str(match_style(current));
                 }
+                continue;
             }
-            out.push_str(&sequence);
-            track_state(&mut state, &sequence);
-            if let Some((_, current)) = active {
-                out.push_str(match_style(current));
-            }
-            continue;
-        }
+            Token::Char(ch) => ch,
+        };
         if let Some((found, _)) = active
             && index == found.end
         {

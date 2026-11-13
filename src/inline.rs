@@ -6,6 +6,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::hyperlink;
 use crate::style::{SGR_RESET, Style};
 
 // Stand-in for control characters so untrusted files cannot drive the terminal
@@ -24,12 +25,20 @@ pub enum Atom {
     Space,
     Break,
     Style(Style),
+    Link(Option<(usize, usize)>),
+    Navigation(Option<usize>),
+    Anchor {
+        start: usize,
+        end: usize,
+    },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Line {
     pub text: String,
     pub width: usize,
+    pub anchors: Vec<(String, usize)>,
+    pub links: Vec<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -114,11 +123,42 @@ impl Inline {
         self.atoms.push(Atom::Break);
     }
 
+    // Mark a validated destination without making its URI visible text
+    pub fn link(&mut self, target: Option<&str>) {
+        let span = target.map(|target| {
+            let start = self.arena.len();
+            self.arena.push_str(target);
+            (start, self.arena.len())
+        });
+        self.atoms.push(Atom::Link(span));
+    }
+
+    // Mark an internal link by its document-local metadata index
+    pub fn navigate(&mut self, index: Option<usize>) {
+        self.atoms.push(Atom::Navigation(index));
+    }
+
+    // Keep a source anchor at its actual position in the wrapped content
+    pub fn anchor(&mut self, id: &str) {
+        let start = self.arena.len();
+        self.arena.push_str(id);
+        self.atoms.push(Atom::Anchor {
+            start,
+            end: self.arena.len(),
+        });
+    }
+
     // Plain semantic text, independent of wrapping and inline style boundaries.
     pub fn plain_text(&self) -> String {
-        let mut out = String::with_capacity(self.arena.len());
+        self.plain_text_from(0)
+    }
+
+    // Collect a semantic label without exposing link targets or anchors
+    pub fn plain_text_from(&self, start: usize) -> String {
+        // A short link label must not reserve the entire paragraph's text and URI arena
+        let mut out = String::new();
         let mut space = false;
-        for atom in &self.atoms {
+        for atom in self.atoms.iter().skip(start) {
             match *atom {
                 Atom::Text { start, end, .. } => {
                     if space && !out.is_empty() {
@@ -128,7 +168,7 @@ impl Inline {
                     space = false;
                 }
                 Atom::Space | Atom::Break => space = true,
-                Atom::Style(_) => {}
+                Atom::Style(_) | Atom::Link(_) | Atom::Navigation(_) | Atom::Anchor { .. } => {}
             }
         }
         out
@@ -169,7 +209,7 @@ fn word_span(atoms: &[Atom], start: usize) -> (usize, usize) {
     while end < atoms.len() {
         match atoms[end] {
             Atom::Text { width: w, .. } => width += w,
-            Atom::Style(_) => {}
+            Atom::Style(_) | Atom::Link(_) | Atom::Navigation(_) | Atom::Anchor { .. } => {}
             Atom::Space | Atom::Break => break,
         }
         end += 1;
@@ -195,7 +235,11 @@ pub fn measure(atoms: &[Atom]) -> usize {
                 pending_space = false;
                 index += 1;
             }
-            Atom::Text { .. } | Atom::Style(_) => {
+            Atom::Text { .. }
+            | Atom::Style(_)
+            | Atom::Link(_)
+            | Atom::Navigation(_)
+            | Atom::Anchor { .. } => {
                 let (end, width) = word_span(atoms, index);
                 if width > 0 {
                     line_width += width + usize::from(pending_space);
@@ -209,18 +253,24 @@ pub fn measure(atoms: &[Atom]) -> usize {
 }
 
 // Accumulates wrapped output lines, writing a style only when text needs it
-struct LineBuilder {
+struct LineBuilder<'a> {
     lines: Vec<Line>,
     text: String,
     width: usize,
     style: Style,
     emitted: Style,
     color: bool,
+    link: Option<&'a str>,
+    emitted_link: Option<&'a str>,
+    navigation: Option<usize>,
+    pending_anchors: Vec<String>,
+    anchors: Vec<(String, usize)>,
+    links: Vec<(usize, usize)>,
 }
 
-impl LineBuilder {
+impl<'a> LineBuilder<'a> {
     // Start with an empty line in the base style
-    fn new(base: Style, color: bool) -> LineBuilder {
+    fn new(base: Style, color: bool) -> LineBuilder<'a> {
         LineBuilder {
             lines: Vec::new(),
             text: String::new(),
@@ -228,11 +278,34 @@ impl LineBuilder {
             style: base,
             emitted: Style::PLAIN,
             color,
+            link: None,
+            emitted_link: None,
+            navigation: None,
+            pending_anchors: Vec::new(),
+            anchors: Vec::new(),
+            links: Vec::new(),
         }
     }
 
     // Bring the terminal up to the wanted style before writing text
     fn sync_style(&mut self) {
+        // A following character may wrap first; bind its anchors only after that decision
+        self.anchors
+            .extend(self.pending_anchors.drain(..).map(|id| (id, self.width)));
+        if let Some(index) = self.navigation
+            && self.links.last().map(|(key, _)| *key) != Some(index)
+        {
+            self.links.push((index, self.width));
+        }
+        if self.link != self.emitted_link {
+            self.close_link();
+            if let Some(target) = self.link {
+                self.text.push_str(hyperlink::OPEN);
+                self.text.push_str(target);
+                self.text.push_str(hyperlink::TERMINATOR);
+                self.emitted_link = Some(target);
+            }
+        }
         if self.color && self.style != self.emitted {
             self.style.write(&mut self.text);
             self.emitted = self.style;
@@ -241,9 +314,17 @@ impl LineBuilder {
 
     // Reset any style left open on the current line
     fn close_style(&mut self) {
+        self.close_link();
         if self.emitted != Style::PLAIN {
             self.text.push_str(SGR_RESET);
             self.emitted = Style::PLAIN;
+        }
+    }
+
+    // Close hyperlinks independently of SGR state
+    fn close_link(&mut self) {
+        if self.emitted_link.take().is_some() {
+            self.text.push_str(hyperlink::CLOSE);
         }
     }
 
@@ -254,6 +335,8 @@ impl LineBuilder {
         self.lines.push(Line {
             text,
             width: self.width,
+            anchors: std::mem::take(&mut self.anchors),
+            links: std::mem::take(&mut self.links),
         });
         self.width = 0;
     }
@@ -285,11 +368,15 @@ impl LineBuilder {
 
     // Close the last line and hand back everything
     fn finish(mut self) -> Vec<Line> {
+        self.anchors
+            .extend(self.pending_anchors.drain(..).map(|id| (id, self.width)));
         self.close_style();
         let text = std::mem::take(&mut self.text);
         self.lines.push(Line {
             text,
             width: self.width,
+            anchors: self.anchors,
+            links: self.links,
         });
         self.lines
     }
@@ -312,7 +399,11 @@ pub fn wrap(atoms: &[Atom], arena: &str, limit: usize, base: Style, color: bool)
                 pending_space = false;
                 index += 1;
             }
-            Atom::Text { .. } | Atom::Style(_) => {
+            Atom::Text { .. }
+            | Atom::Style(_)
+            | Atom::Link(_)
+            | Atom::Navigation(_)
+            | Atom::Anchor { .. } => {
                 let (end, word_width) = word_span(atoms, index);
                 if word_width > 0 {
                     if pending_space {
@@ -329,6 +420,13 @@ pub fn wrap(atoms: &[Atom], arena: &str, limit: usize, base: Style, color: bool)
                 for atom in &atoms[index..end] {
                     match *atom {
                         Atom::Style(style) => builder.set_style(style),
+                        Atom::Link(span) => {
+                            builder.link = span.map(|(start, end)| &arena[start..end])
+                        }
+                        Atom::Navigation(index) => builder.navigation = index,
+                        Atom::Anchor { start, end } => {
+                            builder.pending_anchors.push(arena[start..end].to_owned())
+                        }
                         Atom::Text { start, end, width } => {
                             let text = &arena[start..end];
                             if builder.width + width <= limit {

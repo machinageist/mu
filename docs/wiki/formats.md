@@ -89,6 +89,8 @@ Each document format is translated into the same block and inline structure as M
 
 Every document format records its headings, which feed the pager's [outline](/wiki/pager#outline) and `--toc`.
 
+Semantic links in documents share [the OSC 8 policy](/wiki/usage#links): eligible absolute HTTP(S)/mailto destinations can make labels clickable without printed URL suffixes; otherwise the printed fallback remains. Source, code and data URLs are not auto-linkified. EPUB internal chapter links instead use [pager keyboard navigation](/wiki/pager#chapter-links).
+
 ## Data formats {#data}
 
 Data is colored by token: keys, strings, numbers, booleans and null, comments, punctuation, YAML anchors and tags, and TOML table headers.
@@ -171,7 +173,9 @@ A book (`.epub`) reads as one document, in the order its spine gives:
 - The book's title is the first heading, and its authors follow in italics.
 - Each chapter's body goes through the [HTML presenter](#documents), so headings, lists, tables, quotes and code look as they do for HTML. Chapter headings fill the [outline](/wiki/pager#outline).
 - Pictures are taken from the book and drawn like any other [image](/wiki/images), or show their alt text with `--images never`. A picture missing from the book shows its alt text. Cover pages built from an SVG `<image>` are drawn too.
-- Links to other places in the book show as plain text. Links that leave the book (`http`, `https`, `mailto`) print their URL as usual.
+- Links to other places in the book show their labels, without ZIP paths or generated anchor IDs. In the pager, `Tab` / `Shift-Tab` select them, `Enter` follows and `Backspace` returns, independently of OSC 8 and color, including `--links never`. For short books, use `--paging always`.
+- Relative chapter paths resolve within readable spine chapters; fragment-only links stay in their own chapter. IDs are chapter-scoped, so the same fragment name in two chapters does not collide. Destinations track rendered output lines through reflow. Missing chapters, missing or hidden fragments and other unresolved targets remain readable but non-jumpable.
+- Internal navigation uses no external opener or network access, and does not fabricate file URIs for ZIP members. Terminal-emulator mouse clicks apply to external OSC 8 links, not chapter jumps. Links that leave the book (`http`, `https`, `mailto`) follow [the normal hyperlink policy](/wiki/usage#links), including printed URL fallback.
 - The zip is read with limits: at most 10,000 entries, 64 MB per entry and 256 MB in all. Zip64, encrypted and multi-disk archives are refused. A broken book fails with `mu: FILE: not a readable EPUB: <reason>` and exit code 1.
 
 Apple Books keeps books as unpacked folders. Zip one first, `mimetype` first and stored: `cd Book.epub && zip -X0 ../book.epub mimetype && zip -Xr ../book.epub . -x mimetype`.

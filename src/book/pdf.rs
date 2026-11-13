@@ -100,7 +100,11 @@ pub fn present(text: &str, options: &Options) -> Rendered {
             line: starts.get(*start).copied().unwrap_or_default(),
         })
         .collect();
-    Rendered { text, headings }
+    Rendered {
+        text,
+        headings,
+        ..Rendered::default()
+    }
 }
 
 // A dim rule labelled with the page number, as wide as the output

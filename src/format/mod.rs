@@ -17,7 +17,9 @@ use std::path::Path;
 use crate::book;
 use crate::data;
 use crate::highlight;
-use crate::render::{Options, Rendered, render_events, render_markdown, render_table_events};
+use crate::render::{
+    Options, Rendered, render_annotated_events, render_events, render_markdown, render_table_events,
+};
 
 // Sniffing looks only at the head of the input, cut back to a char boundary
 const SNIFF_BYTES: usize = 8 * 1024;
@@ -388,10 +390,14 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
     let no_headings = |text: String| Rendered {
         text,
         headings: Vec::new(),
+        ..Rendered::default()
     };
     match format {
         Format::Markdown => render_markdown(input, options),
-        Format::Html | Format::Epub => render_events(html::events(input), options, input.len()),
+        Format::Html => render_events(html::events(input), options, input.len()),
+        Format::Epub => {
+            render_annotated_events(html::annotated_events(input), options, input.len())
+        }
         Format::Pdf => book::pdf::present(input, options),
         Format::Rst => render_events(rst::events(input), options, input.len()),
         Format::Org => render_events(org::events(input), options, input.len()),
@@ -442,7 +448,11 @@ fn man_output(input: &str, options: &Options) -> Rendered {
     for heading in &mut headings {
         heading.line = starts[heading.line];
     }
-    Rendered { text, headings }
+    Rendered {
+        text,
+        headings,
+        ..Rendered::default()
+    }
 }
 
 #[cfg(test)]

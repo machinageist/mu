@@ -39,6 +39,7 @@ Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL.
       --toc            Print the document's outline (its headings) and exit
   -w, --width <N>      Wrap at N columns (default: terminal width, capped at 100)
       --color <WHEN>   auto, always or never (default: auto, honours NO_COLOR)
+      --links <WHEN>   auto, always or never (default: auto, supported styled terminals only)
       --paging <WHEN>  auto, always or never (default: auto, pages when taller than the screen)
   -h, --help
   -V, --version
@@ -46,7 +47,8 @@ Reads FILE, or stdin when FILE is - or absent, or fetches an http(s) URL.
 
 - **Format:** `-f` if given, else (for a URL) the response `Content-Type`, else the file or URL path extension, else a look at the content (this is how piped input such as `curl … | mu` is recognised), else Markdown. See [Formats](#formats).
 - **Width:** the terminal width (probed on stdout, then stderr, then stdin, so piping into a pager still sees the real width), capped at 100 columns for readable line lengths. Falls back to 80 when no terminal is attached. `-w` overrides both, minimum 20.
-- **Color:** on when stdout is a terminal and `NO_COLOR` is unset. Use `--color always` to keep styling when piping elsewhere.
+- **Color:** on when stdout is a terminal and `NO_COLOR` is unset or empty. Use `--color always` to keep styling when piping elsewhere.
+- **Links:** `auto` emits OSC 8 hyperlinks only on recognized styled terminals; otherwise URLs remain printed. `always` explicitly enables hyperlinks even with `--color never`, `NO_COLOR`, or piped output; `never` disables OSC 8, not EPUB chapter navigation. See [Links](#links).
 - **Paging:** with `auto`, output that would push the prompt off screen opens in the pager; shorter output prints straight to the terminal (like `less -F`). Output to a pipe or file is never paged, whatever the setting.
 - **Exit codes:** 0 success (including a closed pipe, e.g. `| head`), 1 read/write error, fetch failure or HTTP error status, 2 usage error. Run with no arguments at an interactive prompt, it prints usage instead of waiting on stdin.
 
@@ -75,13 +77,26 @@ These options are a usage error without a URL. mu's `-w` is still the wrap width
 - **Images:** a fetched page loads its remote images as if `--images fetch` were given, resolving relative paths against the final URL. Pass `--images auto` or `never` to stop that.
 - **Errors:** for an HTTP status of 400 or more the body is still shown, then `mu: <url>: HTTP <code>` goes to stderr and mu exits 1. A failed connection prints curl's message and exits 1.
 
+## Links
+
+Semantic document links to absolute `http://`, `https://` or `mailto:` targets can use OSC 8: the label becomes a terminal hyperlink without a redundant `(URL)` suffix. The terminal emulator decides how to activate it, for example with Ctrl-click; mu does not open it or fetch it. With links disabled, unsupported, or rejected, the existing printed-URL fallback remains, and autolinks are not repeated. URLs in source files, code blocks or data are not automatically linkified.
+
+`--links auto` is a conservative environment heuristic, not a capability handshake. It requires terminal stdout and color enabled, plus `TERM=xterm-kitty` or `xterm-ghostty`, `TERM_PROGRAM=iTerm.app`, `WezTerm` or `ghostty`, or a digits-only `VTE_VERSION` of at least `5000`. `TMUX` or `STY` being set, `TERM=dumb`, and `TERM` starting with `screen` or `tmux` force auto fallback. Unknown environments fall back too; mu never queries the terminal. Use `--links always` only when the destination supports OSC 8, or `--links never` to retain printed URLs.
+
+Only passive absolute HTTP(S)/mailto targets qualify. Relative paths, local files, fragments outside EPUB and other schemes stay non-actionable. Literal controls, backslashes, unsafe directional characters and malformed percent escapes are rejected before encoding, not removed to create a different actionable URL. Unicode and unsafe URI bytes are percent-encoded into an ASCII URI, capped at 8192 encoded bytes. The image `--base` setting does not resolve links. Format adapters retain semantic links' source schemes; a local-file prefix is not removed to create a web/mail action. Replacement-character destinations also fall back rather than activating a possibly parser-repaired spelling.
+
+EPUB chapter links use the pager instead: `Tab` / `Shift-Tab` select an internal link, `Enter` follows it and `Backspace` returns. This works without OSC 8 or color, including `--links never`. See [Pager](#pager).
+
+Images inside active links retain their actionable `[image: alt]` text instead of being drawn as a standalone picture with no usable destination.
+
 ## Pager
 
 Built in, no `less` needed. It takes over the screen (alternate screen, so your scrollback is untouched on exit) and reads keys from `/dev/tty`, so `curl … | mu` pages too.
 
 | Keys | Action |
 |---|---|
-| `j` `↓` `Enter` / `k` `↑` | Scroll one line down / up |
+| `j` `↓` / `k` `↑` | Scroll one line down / up |
+| `Enter` | Follow the selected internal EPUB link; otherwise scroll one line down |
 | `space` `f` `PgDn` `Ctrl-F` / `b` `PgUp` `Ctrl-B` | Scroll one page down / up |
 | `d` `Ctrl-D` / `u` `Ctrl-U` | Scroll half a page down / up |
 | `g` `Home` `<` / `G` `End` `>` | Jump to top / bottom |
@@ -90,12 +105,16 @@ Built in, no `less` needed. It takes over the screen (alternate screen, so your 
 | `n` / `N` | Next / previous match, wrapping round the ends |
 | `Esc` | Clear search highlighting |
 | `o` | Outline: the document's headings. `j` `k` and the scroll keys move, `Enter` jumps there, `o` `q` `Esc` close |
+| `Tab` / `Shift-Tab` | Select the next / previous internal EPUB link |
+| `Backspace` | Return after following an internal link (edits the query while searching) |
 | `h` `←` / `l` `→` | Scroll sideways by half a window, for lines wider than the screen such as wide tables |
 | `q` `Ctrl-C` | Quit |
 
-**Search** matches the text as it appears on screen, with styling removed. It is a literal match, not a regular expression, and a lowercase query ignores case while any capital letter makes it case-sensitive. Every visible match is shown in reverse video, and the current one is also bold. The status bar shows the query, the match number and count (`3/17`), and `wrapped` when a jump went round the end. A match never spans two lines.
+**Search** matches the text as it appears on screen, with SGR styling and OSC 8 controls removed, never hidden hyperlink destinations. It is a literal match, not a regular expression, and a lowercase query ignores case while any capital letter makes it case-sensitive. Every visible match is shown in reverse video, and the current one is also bold. The status bar shows the query, the match number and count (`3/17`), and `wrapped` when a jump went round the end. A match never spans two lines.
 
 **Outline** works for every document format, and opens on the heading of the section you are reading. `mu --toc FILE` prints the same outline without paging.
+
+**EPUB chapter navigation** cycles through resolvable internal links in document order, scrolling the selected link into view vertically and horizontally and showing its label with `Enter follow` in the status bar. Relative chapter paths resolve within the book; fragments are scoped to their chapter, so repeated IDs in different chapters do not collide. Destinations use rendered output lines and display columns and are recomputed on reflow. Missing chapters, missing or hidden fragments and other unresolved targets stay readable but are not jumpable. These are keyboard jumps inside mu, not terminal-emulator mouse clicks or invented file URIs for ZIP members; they use no external opener or network access.
 
 The bottom row shows the file name, the visible line range, how far through you are, and the key hints. Resizing the window re-renders the document at the new width and keeps your place proportionally; with `-w` the layout stays fixed and only the window changes. Lines wider than the window are clipped rather than wrapped.
 
@@ -152,7 +171,7 @@ The Markdown mapping below is the reference; the other document formats map thei
 | `###`–`######` | Bold, a distinct color per level |
 | `**bold**` `*italic*` `~~strike~~` | SGR bold / italic / strikethrough |
 | `` `code` `` | Yellow |
-| `[text](url)` | Underlined blue text, then the URL dimmed in parentheses (autolinks are not repeated) |
+| `[text](url)` | Underlined blue text when color is on; an OSC 8 label when enabled and valid, otherwise the URL dimmed in parentheses (autolinks are not repeated) |
 | `![alt](src)` | `[image: alt]` |
 | Lists | `•` `◦` `▪` by depth, numbers for ordered lists; wrapped lines align under the text; tight lists stay tight |
 | `- [ ]` / `- [x]` | `☐` / `☑` in place of the bullet |
@@ -170,14 +189,14 @@ The Markdown mapping below is the reference; the other document formats map thei
 - **Images:** `png`, `zune-jpeg`, `gif` and `image-webp` decode raster images; `resvg` (default features off: no text, no system fonts) renders SVG. Fitting, resampling and the half-block, Kitty and iTerm2 encoders are hand-written. Decoded images are cached for the run, so a pager resize redraws without reloading.
 - **Parser:** [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) with default features off and `simd` on (CommonMark plus GFM tables, strikethrough, task lists, footnotes, alerts). HTML, reStructuredText, Org and AsciiDoc have small hand-written, tolerant parsers that emit the same pulldown-cmark events, so they reuse the whole layout engine. JSON, YAML and TOML have hand-written tokenizers feeding a shared printer. The other dependencies are `unicode-width` (CJK and emoji columns) and `libc` (one ioctl).
 - **Theme:** text uses only the 16 base ANSI colors plus bold, dim, italic, underline and strike, so output follows your terminal's palette instead of fighting it.
-- **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mu emits are its own: SGR styling and, for images, 24-bit colors and Kitty or iTerm2 image sequences whose payload mu encodes itself.
-- **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write, or the pager. Styles are emitted lazily and every line closes its own style, so the pager can draw any window of lines on its own.
+- **Untrusted input is safe to view:** control characters in the document (including ESC, BEL and C1 codes) are replaced with `�` before output, so a hostile file cannot set your title, write to the clipboard via OSC 52, or clear the screen. The only escapes mu emits are its own: SGR styling, validated and encoded OSC 8 hyperlinks and, for images, 24-bit colors and Kitty or iTerm2 image sequences whose payload mu encodes itself.
+- **Pipeline:** events → per-block buffer of styled word atoms in one text arena → word wrap → container gutters (quote bars, list indents) prepended per line → one buffered write, or the pager. Styles are emitted lazily and every line closes its own style and hyperlink before its newline. Hyperlinks exclude padding, gutters, table borders and the status bar, so the pager can draw any window of lines on its own.
 - **Pager terminal handling:** raw mode via `termios`, a self-pipe for `SIGWINCH` so a resize can never be missed between a redraw and the next `select()` (not `poll()`, which macOS rejects for `/dev/tty`), synchronized-output frames to avoid flicker, and the terminal restored on exit, on error and from a panic hook. Image decoding runs under `catch_unwind`, so a bug in a third-party decoder shows the alt text instead of crashing.
 
 ```text
 src/
-  main.rs    CLI: args, input, width/color/paging decisions, single write
-  pager/     built-in pager: raw mode, keys, scrolling, search, outline, resize, status bar
+  main.rs    CLI: args, input, width/color/links/paging decisions, single write
+  pager/     built-in pager: raw mode, keys, scrolling, search, outline, chapter jumps, resize, status bar
   term.rs    terminal size via TIOCGWINSZ
   lib.rs     public API: render, present, present_outlined, outline, detect, sniff, sniff_bytes, extract, Format, Options
   format/    Format enum, detection, dispatch; html, rst, org, asciidoc, man, csv → events; jupyter → Markdown
@@ -186,6 +205,7 @@ src/
   image/     sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs  event walker: blocks, containers, lists, code frames
   inline.rs  styled word atoms, control-char scrubbing, word wrap
+  hyperlink.rs  external OSC 8 target validation and bounded ASCII URI encoding
   table.rs   column fitting and box drawing
   style.rs   SGR styles and the color theme
 ```
@@ -211,7 +231,9 @@ cargo clippy --all-targets
 cargo run --release -- -w 60 tests/fixtures/kitchen-sink.md
 ```
 
-`tests/render.rs` and one test file per format (`tests/html.rs`, `tests/json.rs`, …) have exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output, every styled line resets before its newline, and no control character from the input reaches the output. `src/pager/` unit-tests key decoding, scrolling, search, the outline, resize behaviour and the status bar, and `tests/pager_pty.rs` drives the real pager in a pseudo-terminal: resizing, search, the outline and sideways scrolling. `tests/sniff.rs` sniffs every fixture against every format so one format's rule cannot quietly claim another's files.
+`tests/render.rs` and one test file per format (`tests/html.rs`, `tests/json.rs`, …) have exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output at a fixed hyperlink policy, every styled line resets before its newline, and no control character from the input reaches the output. Hyperlink regressions exercise the public rendering API, CLI environment policy and real pager in a pseudo-terminal; EPUB cases extract actual ZIP books and check chapter-scoped destinations. `src/pager/` unit-tests key decoding, scrolling, search, the outline, chapter jumps, resize behaviour and the status bar, and `tests/pager_pty.rs` drives resizing, search, outlines, sideways scrolling and internal navigation. These tests verify emitted bytes and pager behavior, not a desktop emulator's click gesture. `tests/sniff.rs` sniffs every fixture against every format so one format's rule cannot quietly claim another's files.
+
+The library does not inspect terminal environment variables: `Options.links: bool` is explicit and defaults to `false`, including in `Options::new(width, color)`. `render` and `present` return text; `present_outlined` returns `Rendered { text, headings, anchors, links }`, including `Anchor { id, line, column }` and `NavigationLink { target, label, line, column }` for EPUB's internal navigation. Positions use zero-based rendered output lines and terminal display columns; external OSC 8 destinations are not pager navigation links. For a binary EPUB, call `extract(bytes, Format::Epub)` before `present_outlined` with `Format::Epub`.
 
 ## Versioning
 
@@ -219,7 +241,7 @@ Semantic Versioning, with every change recorded in `CHANGELOG.md`. Release and c
 
 The user guide lives in `docs/wiki/`, one Markdown page per wiki page, and changes in the same commit as the feature it describes. `scripts/check-docs.sh` checks that before a release.
 
-**EPUB books** are read in-process: the spine gives the reading order, each chapter's body is shown through the HTML presenter, and the book's title and authors head the document. Pictures are taken from the book and drawn like any other image, links inside the book show as plain text, and chapter headings fill the outline. The zip is checked as it is read: at most 10,000 entries, 64 MB per entry and 256 MB in all, and Zip64 and encrypted books are refused.
+**EPUB books** are read in-process: the spine gives the reading order, each chapter's body is shown through the HTML presenter, and the book's title and authors head the document. Pictures are taken from the book and drawn like any other image, chapter headings fill the outline, and internal link labels can be followed with the pager's keyboard navigation. External HTTP(S)/mailto links follow `--links`. The zip is checked as it is read: at most 10,000 entries, 64 MB per entry and 256 MB in all, and Zip64 and encrypted books are refused.
 
 **PDF** goes through poppler's `pdftotext -layout`, so the text keeps the page's columns and spacing. A dim `page N` rule separates pages, each page is an outline entry, and wide pages use the full terminal width.
 
@@ -231,7 +253,7 @@ The user guide lives in `docs/wiki/`, one Markdown page per wiki page, and chang
 - Content detection reads the first 8 KB. Short or unusual inputs may be shown as Markdown; use `-f`.
 - Images: no EXIF orientation for JPEGs, no animated GIFs, no SVG text, and no images inline within a line of text.
 - URLs: no caching between runs, and charsets other than UTF-8 are shown with replacement characters. A repository's front page is fetched as HTML; point at the README's blob URL instead.
-- Links are not clickable (no OSC 8 hyperlinks); the URL is printed instead.
+- External hyperlinks require an OSC 8-capable terminal; unknown environments retain printed URLs in auto mode. Relative document links outside EPUB are not resolved, and source/code/data URLs are not auto-linkified.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.
 - A table with too many columns to fit at 3 columns each (10 for CSV and TSV) overflows the width rather than becoming unreadable; the pager scrolls it sideways.
 - Binary plists (`bplist00`) are not decoded.
