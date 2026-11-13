@@ -4,6 +4,13 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Fixed
+- Syntax coloring keeps quoted comment markers inside preprocessor directives, respects each language's block-comment nesting and hash-comment rules, and recognizes the existing PowerShell and Scheme boolean constants
+- Code highlighting now follows common HTML and EPUB language hints on wrappers and nested `code` elements, with the innermost code language taking precedence. AsciiDoc source languages accept quotes and attribute references, and OPML code blocks use the XML highlighter
+- Source URLs use their supported `Content-Type` to choose highlighting, including extensionless URLs. Script highlighting handles a leading UTF-8 BOM and `env` options or assignments; unlabelled document code blocks also use a script's `#!` line
+- HTML headings no longer include decorative permalink icons or fragment URLs. Meaningful heading links retain their text and formatting, malformed heading tags recover without swallowing later sections, and hidden headings do not suppress the page title
+- Outline labels keep long words intact at every terminal width. Heading metadata no longer requires a second wrapping pass, and plain source output skips unnecessary language lookup
+
 ## 0.8.0 - 2026-11-10
 
 ### Added

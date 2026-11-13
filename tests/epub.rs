@@ -8,7 +8,7 @@ mod common;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use common::assert_invariants;
+use common::{assert_invariants, strip_sgr};
 use mu::{
     CellSize, Format, ImageMode, ImageOptions, Options, Protocol, extract, present,
     present_outlined, sniff_bytes,
@@ -194,6 +194,136 @@ fn outline_lists_the_title_and_chapter_headings() {
             (2, "Coda".to_owned()),
         ]
     );
+}
+
+#[test]
+fn extracted_chapters_keep_highlighting_and_clean_heading_labels() {
+    let chapter = CHAPTER_ONE.replace(
+        "<h1>Beginnings</h1>",
+        "<h1>Beginnings<a class=\"headerlink\" href=\"#begin\">¶</a></h1><div class=\"language-python\"><pre><span><code>def f(): return None</code></span></pre></div>",
+    );
+    let bytes = zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OEBPS/content.opf", PACKAGE.as_bytes()),
+        ("OEBPS/text/one.xhtml", chapter.as_bytes()),
+        ("OEBPS/text/two.xhtml", CHAPTER_TWO.as_bytes()),
+    ]);
+    let html = extract(&bytes, Format::Epub).expect("readable book");
+    for width in [30, 60, 80] {
+        let out = present_outlined(&html, Format::Epub, &Options::new(width, true));
+        assert!(
+            out.text.contains("\x1b[0;1;35mdef\x1b[0m"),
+            "{:?}",
+            out.text
+        );
+        assert!(
+            out.headings
+                .iter()
+                .any(|heading| heading.text == "Beginnings")
+        );
+        assert!(!out.text.contains('¶'));
+        assert_eq!(
+            strip_sgr(&out.text),
+            present(&html, Format::Epub, &Options::new(width, false))
+        );
+    }
+    assert_invariants(&html, Format::Epub);
+}
+
+#[test]
+fn chapter_root_language_hints_survive_extraction_without_leaking() {
+    let package = PACKAGE
+        .replace(
+            "</manifest>",
+            "<item id=\"three\" href=\"text/three.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"four\" href=\"text/four.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>",
+        )
+        .replace(
+            "</spine>",
+            "<itemref idref=\"three\"/><itemref idref=\"four\"/></spine>",
+        );
+    for (python, unknown) in [
+        (r#"class="language-python""#, r#"data-language="unknown""#),
+        (r#"data-lang="python""#, r#"class="language-unknown""#),
+        (r#"data-language="python""#, r#"data-lang="unknown""#),
+        (r#"class="lang-python""#, r#"class="lang-unknown""#),
+    ] {
+        let one = format!(
+            "<html {python} onload=\"discard-html\"><head><title>Head stays excluded</title><pre>head code</pre></head><body hidden><pre><code>def html_hint(): return None</code></pre></body></html>"
+        );
+        let two = format!(
+            "<html {python}><head><title>Another excluded head</title></head><body {unknown} style=\"discard-body\"><pre><code>#!/usr/bin/env python3\ndef body_unknown(): return None</code></pre></body></html>"
+        );
+        let three = format!(
+            "<html {unknown}><body {python}><pre><code>def body_hint(): return None</code></pre></body></html>"
+        );
+        let four = "<html><body><pre><code>def unlabeled(): return None</code></pre></body></html>";
+        let bytes = zip(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER.as_bytes()),
+            ("OEBPS/content.opf", package.as_bytes()),
+            ("OEBPS/text/one.xhtml", one.as_bytes()),
+            ("OEBPS/text/two.xhtml", two.as_bytes()),
+            ("OEBPS/text/three.xhtml", three.as_bytes()),
+            ("OEBPS/text/four.xhtml", four.as_bytes()),
+        ]);
+        let html = extract(&bytes, Format::Epub).expect("readable book");
+        assert!(!html.contains("Head stays excluded"));
+        assert!(!html.contains("Another excluded head"));
+        assert!(!html.contains("head code"));
+        assert!(!html.contains("discard-html"));
+        assert!(!html.contains("discard-body"));
+        assert!(!html.contains("hidden"));
+        for width in [30, 60, 80] {
+            let color = present(&html, Format::Epub, &Options::new(width, true));
+            let plain = present(&html, Format::Epub, &Options::new(width, false));
+            for (name, highlighted) in [
+                ("html_hint", true),
+                ("body_unknown", false),
+                ("body_hint", true),
+                ("unlabeled", false),
+            ] {
+                let line = color
+                    .lines()
+                    .find(|line| strip_sgr(line).contains(name))
+                    .expect("chapter code remains visible");
+                assert_eq!(
+                    line.contains("\x1b[0;1;35mdef\x1b[0m"),
+                    highlighted,
+                    "{python}, width {width}, {name}: {line:?}"
+                );
+            }
+            assert_eq!(strip_sgr(&color), plain);
+            let positions = ["html_hint", "body_unknown", "body_hint", "unlabeled"]
+                .map(|name| plain.find(name).expect("chapter code remains visible"));
+            assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        }
+        assert_invariants(&html, Format::Epub);
+    }
+}
+
+#[test]
+fn chapter_language_metadata_is_escaped_without_double_escaping_entities() {
+    let chapter = r#"<html class='language-python extra" data-injected="<script>never</script>&quot;' data-lang="p&#121;thon" data-language="p&#121;thon">
+<head><title>Excluded head</title></head><body><pre>def escaped_hint(): return None</pre></body></html>"#;
+    let bytes = zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OEBPS/content.opf", PACKAGE.as_bytes()),
+        ("OEBPS/text/one.xhtml", chapter.as_bytes()),
+        ("OEBPS/text/two.xhtml", CHAPTER_TWO.as_bytes()),
+    ]);
+    let html = extract(&bytes, Format::Epub).expect("readable book");
+    assert!(html.contains(
+        r#"<div class="language-python extra&quot; data-injected=&quot;&lt;script&gt;never&lt;/script&gt;&quot;" data-lang="p&#121;thon" data-language="p&#121;thon">"#
+    ));
+    assert!(!html.contains(r#" data-injected=""#));
+    assert!(!html.contains("<script>"));
+    assert!(!html.contains("Excluded head"));
+    let color = present(&html, Format::Epub, &Options::new(WIDTH, true));
+    assert!(color.contains("\x1b[0;1;35mdef\x1b[0m"), "{color:?}");
+    assert!(!color.contains("never"));
+    assert_invariants(&html, Format::Epub);
 }
 
 #[test]

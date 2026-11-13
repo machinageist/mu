@@ -1688,7 +1688,7 @@ const DOCKER_KEYWORDS: &[&str] = &[
 // Every language mu highlights; the first name is the canonical one
 pub(crate) const LANGUAGES: &[Language] = &[
     Language {
-        names: &["c", "h"],
+        names: &["c", "h", "text/x-c", "text/x-csrc", "text/x-chdr"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
         quotes: &[DOUBLE, SINGLE],
@@ -1710,6 +1710,8 @@ pub(crate) const LANGUAGES: &[Language] = &[
             "cplusplus",
             "cuda",
             "cu",
+            "text/x-c++src",
+            "text/x-c++hdr",
         ],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
@@ -1734,9 +1736,10 @@ pub(crate) const LANGUAGES: &[Language] = &[
         ..BASE
     },
     Language {
-        names: &["rust", "rs"],
+        names: &["rust", "rs", "text/x-rust"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
+        nested_comments: true,
         quotes: &[DOUBLE_MULTILINE, SINGLE],
         keywords: RUST_KEYWORDS,
         types: RUST_TYPES,
@@ -1747,7 +1750,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         ..BASE
     },
     Language {
-        names: &["go", "golang"],
+        names: &["go", "golang", "text/x-go"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
         quotes: &[DOUBLE, SINGLE, BACKTICK],
@@ -1771,6 +1774,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         names: &["nim"],
         line_comments: HASH_COMMENTS,
         block_comments: &[("#[", "]#")],
+        nested_comments: true,
         quotes: &[TRIPLE_DOUBLE, DOUBLE, SINGLE],
         keywords: NIM_KEYWORDS,
         types: NIM_TYPES,
@@ -1789,7 +1793,16 @@ pub(crate) const LANGUAGES: &[Language] = &[
         ..BASE
     },
     Language {
-        names: &["python", "py", "pyi", "python3", "py3", "gyp", "sage"],
+        names: &[
+            "python",
+            "py",
+            "pyi",
+            "python3",
+            "py3",
+            "gyp",
+            "sage",
+            "text/x-python",
+        ],
         line_comments: HASH_COMMENTS,
         quotes: &[TRIPLE_DOUBLE, TRIPLE_SINGLE, DOUBLE, SINGLE],
         keywords: PYTHON_KEYWORDS,
@@ -1853,6 +1866,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         names: &["julia", "jl"],
         line_comments: HASH_COMMENTS,
         block_comments: &[("#=", "=#")],
+        nested_comments: true,
         quotes: &[TRIPLE_DOUBLE, DOUBLE, SINGLE],
         keywords: JULIA_KEYWORDS,
         constants: JULIA_CONSTANTS,
@@ -1870,6 +1884,9 @@ pub(crate) const LANGUAGES: &[Language] = &[
             "jsx",
             "node",
             "ecmascript",
+            "text/javascript",
+            "application/javascript",
+            "application/x-javascript",
         ],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
@@ -1895,7 +1912,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         ..BASE
     },
     Language {
-        names: &["css", "scss", "sass", "less", "stylus"],
+        names: &["css", "scss", "sass", "less", "stylus", "text/css"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
         quotes: &[DOUBLE, SINGLE],
@@ -1906,7 +1923,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         ..BASE
     },
     Language {
-        names: &["java"],
+        names: &["java", "text/x-java", "text/x-java-source"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
         quotes: &[TRIPLE_DOUBLE, DOUBLE, SINGLE],
@@ -1921,6 +1938,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         names: &["kotlin", "kt", "kts"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
+        nested_comments: true,
         quotes: &[TRIPLE_DOUBLE, DOUBLE, SINGLE],
         keywords: KOTLIN_KEYWORDS,
         constants: KOTLIN_CONSTANTS,
@@ -1932,6 +1950,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         names: &["scala", "sc", "sbt"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
+        nested_comments: true,
         quotes: &[TRIPLE_DOUBLE, DOUBLE, SINGLE],
         keywords: SCALA_KEYWORDS,
         constants: COMMON_CONSTANTS,
@@ -1966,6 +1985,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         names: &["fsharp", "fs", "f#", "fsx", "fsi"],
         line_comments: SLASH_COMMENTS,
         block_comments: &[("(*", "*)")],
+        nested_comments: true,
         quotes: &[TRIPLE_DOUBLE, DOUBLE],
         keywords: FSHARP_KEYWORDS,
         types: FSHARP_TYPES,
@@ -1977,6 +1997,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         names: &["haskell", "hs", "lhs"],
         line_comments: DASH_COMMENTS,
         block_comments: &[("{-", "-}")],
+        nested_comments: true,
         quotes: &[DOUBLE],
         keywords: HASKELL_KEYWORDS,
         constants: HASKELL_CONSTANTS,
@@ -1987,6 +2008,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
     Language {
         names: &["ocaml", "ml", "mli"],
         block_comments: &[("(*", "*)")],
+        nested_comments: true,
         quotes: &[DOUBLE],
         keywords: OCAML_KEYWORDS,
         types: OCAML_TYPES,
@@ -2036,6 +2058,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         ],
         line_comments: SEMICOLON_COMMENTS,
         block_comments: &[("#|", "|#")],
+        nested_comments: true,
         quotes: &[DOUBLE_MULTILINE],
         keywords: LISP_KEYWORDS,
         constants: LISP_CONSTANTS,
@@ -2046,6 +2069,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         names: &["dart"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
+        nested_comments: true,
         quotes: &[TRIPLE_DOUBLE, TRIPLE_SINGLE, DOUBLE, SINGLE],
         keywords: DART_KEYWORDS,
         types: DART_TYPES,
@@ -2058,6 +2082,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         names: &["swift"],
         line_comments: SLASH_COMMENTS,
         block_comments: C_BLOCK,
+        nested_comments: true,
         quotes: &[TRIPLE_DOUBLE, DOUBLE],
         keywords: SWIFT_KEYWORDS,
         types: SWIFT_TYPES,
@@ -2078,12 +2103,16 @@ pub(crate) const LANGUAGES: &[Language] = &[
             "shell-session",
             "dash",
             "ebuild",
+            "text/x-sh",
+            "application/x-sh",
+            "text/x-shellscript",
         ],
         line_comments: HASH_COMMENTS,
         quotes: &[DOUBLE_MULTILINE, SINGLE_RAW],
         keywords: SHELL_KEYWORDS,
         constants: SHELL_CONSTANTS,
         variables: true,
+        shell_comments: true,
         ident_extra: "-",
         ..BASE
     },
@@ -2094,6 +2123,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         keywords: FISH_KEYWORDS,
         constants: SHELL_CONSTANTS,
         variables: true,
+        shell_comments: true,
         ident_extra: "-",
         ..BASE
     },
@@ -2106,6 +2136,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         constants: POWERSHELL_CONSTANTS,
         ignore_case: true,
         variables: true,
+        shell_comments: true,
         ident_extra: "-",
         ..BASE
     },
@@ -2128,9 +2159,11 @@ pub(crate) const LANGUAGES: &[Language] = &[
             "plsql",
             "sqlite",
             "tsql",
+            "application/sql",
         ],
         line_comments: DASH_COMMENTS,
         block_comments: C_BLOCK,
+        nested_comments: true,
         quotes: &[SINGLE, DOUBLE, BACKTICK],
         keywords: SQL_KEYWORDS,
         types: SQL_TYPES,
@@ -2229,7 +2262,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
         ..BASE
     },
     Language {
-        names: &["diff", "patch", "udiff"],
+        names: &["diff", "patch", "udiff", "text/x-diff", "text/x-patch"],
         kind: Kind::Diff,
         ..BASE
     },
@@ -2265,7 +2298,7 @@ pub(crate) const LANGUAGES: &[Language] = &[
     Language {
         names: &[
             "xml", "html", "htm", "xhtml", "svg", "plist", "xsd", "xsl", "xslt", "rss", "atom",
-            "vue", "svelte", "jsp", "erb",
+            "vue", "svelte", "jsp", "erb", "opml",
         ],
         kind: Kind::Xml,
         ..BASE

@@ -249,13 +249,19 @@ fn load_url(args: &Args, url: &str) -> Result<Source, String> {
         failure: response
             .is_error()
             .then(|| format!("{url}: HTTP {}", response.status)),
-        language: extension(
-            response
-                .final_url
-                .split(URL_PATH_ENDS)
-                .next()
-                .unwrap_or_default(),
-        ),
+        language: response
+            .content_type()
+            .filter(|content_type| Format::from_media_type(content_type) == Some(Format::Code))
+            .map(str::to_owned)
+            .or_else(|| {
+                extension(
+                    response
+                        .final_url
+                        .split(URL_PATH_ENDS)
+                        .next()
+                        .unwrap_or_default(),
+                )
+            }),
     })
 }
 

@@ -812,18 +812,8 @@ impl<'o> Renderer<'o> {
             self.inline.base,
             self.options.color,
         );
-        // The same wrap without color gives the heading's plain text
-        let text = wrap(
-            &self.inline.atoms,
-            &self.inline.arena,
-            self.avail(),
-            self.inline.base,
-            false,
-        )
-        .iter()
-        .map(|line| line.text.trim())
-        .collect::<Vec<_>>()
-        .join(" ");
+        // Layout-generated line breaks must not split words in outline labels.
+        let text = self.inline.plain_text();
         let line = self.current_line();
         self.headings.push(Heading {
             level: u8::try_from(self.heading + 1).unwrap_or(u8::MAX),
@@ -880,6 +870,9 @@ impl<'o> Renderer<'o> {
 
         // Highlighted body, when color is on and the language is known
         let language = match &raw.kind {
+            RawKind::Code(lang) if color && lang.is_empty() => {
+                highlight::language_from_shebang(&raw.text)
+            }
             RawKind::Code(lang) if color => highlight::language(lang),
             _ => None,
         };

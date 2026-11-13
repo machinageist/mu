@@ -18,15 +18,48 @@ const HTML_BODY: &str = "<h1>Hello</h1><p>From the <b>server</b>.</p>";
 const JSON_BODY: &str = "{\"name\":\"mu\",\"tags\":[1,2]}";
 const MISSING_BODY: &str = "# Not here\n";
 const OUTLINE_BODY: &str = "# Guide\n\nIntro.\n\n## Install\n\n## Use\n";
+const SOURCE_BODY: &str = "\"quoted\"\n+added\n";
+const PYTHON_BODY: &str = "def f(): return None\n";
+const SOURCE_TYPES: &[&str] = &[
+    "text/x-c",
+    "text/x-csrc",
+    "text/x-chdr",
+    "text/x-c++src",
+    "text/x-c++hdr",
+    "text/x-python",
+    "text/x-rust",
+    "text/x-go",
+    "text/x-java",
+    "text/x-java-source",
+    "text/javascript",
+    "application/javascript",
+    "application/x-javascript",
+    "text/x-sh",
+    "application/x-sh",
+    "text/x-shellscript",
+    "text/x-diff",
+    "text/x-patch",
+    "text/css",
+    "application/sql",
+];
 // The hand-written fixture PDF is plain ASCII, so it can be served as text
 const PDF_BODY: &str = include_str!("fixtures/sample.pdf");
 const PDF_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.pdf");
 
 // Answer a request path with (status line, content type, body)
 fn route(path: &str) -> (&'static str, &'static str, &'static str) {
+    if let Some(index) = path
+        .strip_prefix("/source/")
+        .and_then(|index| index.parse::<usize>().ok())
+        && let Some(media_type) = SOURCE_TYPES.get(index)
+    {
+        return ("200 OK", media_type, SOURCE_BODY);
+    }
     match path {
         "/page" => ("200 OK", "text/html; charset=utf-8", HTML_BODY),
         "/data" => ("200 OK", "application/json", JSON_BODY),
+        "/script.rs" => ("200 OK", "Text/X-Python; charset=UTF-8", PYTHON_BODY),
+        "/script.py" => ("200 OK", "text/plain", PYTHON_BODY),
         "/guide" => ("200 OK", "text/markdown", OUTLINE_BODY),
         "/paper" => ("200 OK", "application/pdf", PDF_BODY),
         "/old" => ("301 Moved Permanently", "text/plain", ""),
@@ -114,6 +147,34 @@ fn json_is_chosen_by_content_type() {
     let (_, expected, _) = run(&["-f", "json"], JSON_BODY);
     assert_eq!(code, 0);
     assert_eq!(out, expected);
+}
+
+#[test]
+fn source_urls_use_every_supported_source_media_type_for_highlighting() {
+    let base = serve();
+    for (index, media_type) in SOURCE_TYPES.iter().enumerate() {
+        let url = format!("{base}/source/{index}");
+        let (code, color, err) = run(&["--color=always", &url], "");
+        assert_eq!(code, 0, "{media_type}: {err}");
+        let expected = if media_type.ends_with("diff") || media_type.ends_with("patch") {
+            "\x1b[0;92m+added\x1b[0m"
+        } else {
+            "\x1b[0;32m\"quoted\"\x1b[0m"
+        };
+        assert!(color.contains(expected), "{media_type}: {color:?}");
+        let (_, plain, _) = run(&[&url], "");
+        assert_eq!(plain, SOURCE_BODY, "{media_type}");
+    }
+}
+
+#[test]
+fn source_url_language_respects_media_type_then_extension() {
+    let base = serve();
+    for path in ["script.rs", "script.py"] {
+        let (code, out, err) = run(&["--color=always", &format!("{base}/{path}")], "");
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("\x1b[0;1;35mdef\x1b[0m"), "{out:?}");
+    }
 }
 
 #[test]

@@ -12,6 +12,7 @@ What mu deliberately leaves out, what it doesn't do yet, and how fast it is.
 ### Rendering {#limits-rendering}
 
 - Syntax highlighting is lexical, from small built-in lexers, with no grammar: heredocs, string interpolation and regex literals aren't picked out, and a name's role is guessed from its spelling. Code blocks and source files in an unknown language stay plain.
+- Vue and Svelte source uses the XML/HTML highlighter for markup; embedded JavaScript and CSS do not get separate language lexing. PDF page text, table cells and unlabelled prose are not guessed to be source code.
 - Links aren't clickable (no OSC 8 hyperlinks). The URL is printed instead.
 - Definition lists, math and wiki links aren't enabled in Markdown; they render as plain text.
 - In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.

@@ -64,7 +64,7 @@ Real output of `mu -w 52` on a short document. Note the `┆` where the long cod
 - **CSV and TSV tables** use the same engine, but take the full terminal width and stop shrinking columns at 10. A wider table overflows, and the pager [scrolls it sideways](/wiki/pager#sideways). See [Tables](/wiki/formats#tables).
 - **Wide glyphs**: CJK and emoji are measured by display width (`unicode-width`), not byte or char count.
 - **Code blocks**: highlighted by the language in the info string, as below. A block in an unknown language stays plain.
-- **Headings** are recorded with their level, text and first output line, for the pager's [outline](/wiki/pager#outline) and `--toc`.
+- **Headings** are recorded with their level, text and first output line, for the pager's [outline](/wiki/pager#outline) and `--toc`. Outline labels are independent of wrapping, so resizing never inserts spaces inside long words.
 - **Links**: the URL is printed after the text. Links are not clickable, since mu doesn't emit OSC 8 hyperlinks.
 
 ## Syntax highlighting {#highlighting}
@@ -81,8 +81,18 @@ Source files and fenced code blocks are highlighted when color is on. Keywords, 
   - sh/bash/zsh, fish, PowerShell and batch
   - SQL, Vim script, Make, CMake, Dockerfile, protobuf, GraphQL, HCL/Terraform and Nix
   - diffs, INI-style config, and JSON, YAML, TOML and XML/HTML, which use the data highlighters but are never re-indented inside a code block
-- **Names**: a code block's info string or a file's extension, in any case, with common aliases such as `py`, `js`, `bash`, `console`, `c++` and `golang`. A script with no extension is matched by its `#!` interpreter.
-- **How**: one table-driven lexer reads each language's comment markers, quotes, keywords and a few flags, so the whole set costs about 66 KB of binary and almost no time. There's no grammar, so it can't tell a type from a variable by context.
+- **Names**: a code block's info string or a file's extension, in any case, with common aliases such as `py`, `js`, `bash`, `console`, `c++` and `golang`. A source URL first uses its supported source `Content-Type`, so extensionless code URLs are highlighted too.
+- **Scripts**: the `#!` interpreter supplies a missing language, including in unlabelled document code blocks and man-page examples. A leading UTF-8 BOM and `env` options or assignments are accepted. An explicitly unknown block language stays plain.
+- **HTML and EPUB**: language hints can come from `language-`/`lang-` classes or `data-language`/`data-lang` attributes on wrappers, `pre`, or nested `code`. Bare known language classes such as `python` work on `pre` and `code`. The nested code's hint wins over surrounding blocks.
+- **AsciiDoc**: `[source,"python"]` and attribute references such as `[source,{lang}]` use the same highlighting as `[source,python]`.
+- **How**: one table-driven lexer reads each language's comment markers, quotes, keywords and a few flags, without runtime grammar loading or an external highlighter. There's no grammar, so it can't tell a type from a variable by context.
+- **Comments and constants**: block-comment nesting and hash-comment boundaries follow the selected language, and comment markers inside a preprocessor directive's quoted strings do not open comments. PowerShell `$true`/`$false`/`$null` and Scheme `#t`/`#f` use the constant style rather than being mistaken for variables or plain text.
+
+### HTML heading cleanup {#html-headings}
+
+Documentation permalinks such as `¶`, `§` and link icons are omitted from headings and outlines. Fragment links wrapping real heading text keep the text and its inline styles without appending `(#fragment)`. External heading links, and links in ordinary paragraphs or tables, still print their destinations. Missing or mismatched heading tags recover without consuming later sections, and headings inside hidden templates do not suppress the page-title fallback.
+
+Only recognizable decorative-link classes or a heading's own permalink identify a symbol as decoration. Linked code symbols such as `#`, links to other sections, and all-symbol titles keep their text.
 
 ## Theme {#theme}
 

@@ -39,6 +39,11 @@ A terminal presenter that turns markup and data into readable, styled, wrapped t
 
 Document formats share one layout engine. Each one gets the same headings, lists, quotes, tables, code frames, links and pager. Data formats are syntax-highlighted. Source code is shown line for line as written, with no Markdown interpretation, and long lines hard-wrap like data. Source files and fenced code blocks are syntax-highlighted by language when color is on (extension, `#!` line or info string); highlighting only changes styles, so color output with styling removed equals plain output. Valid JSON is also re-indented, and XML is re-indented when its tags balance and no element mixes text with child elements.
 
+- Source URL highlighting follows a supported source `Content-Type`, then the path extension, then the shebang. A shebang may follow a UTF-8 BOM and use `env` options or assignments. Unlabelled document code blocks also use a shebang; an explicitly unknown block language stays plain.
+- Lexers use per-language block-comment nesting and hash-comment boundaries; quoted strings in preprocessor directives do not start comments. Known prefixed constants, such as PowerShell booleans and Scheme `#t`/`#f`, retain the constant style without consuming longer variable or identifier names.
+- HTML and EPUB code blocks accept `language-`/`lang-` classes and `data-language`/`data-lang` hints on block ancestors, `pre`, or nested `code`; bare known language classes work on `pre` and `code`. A nested `code` hint takes precedence over its surrounding blocks. AsciiDoc source languages accept paired quotes and existing attribute substitutions.
+- HTML headings omit decorative fragment permalink icons and URLs; meaningful fragment-linked labels retain their inline formatting. External heading links and ordinary paragraph links still print their destinations. Missing or mismatched heading tags recover locally, and hidden content does not suppress the document-title fallback.
+
 Tables (CSV and TSV) go through the same table engine as Markdown tables:
 - The first record is the header, and numeric columns are right-aligned.
 - Quoting follows RFC 4180, and a CSV's delimiter is detected.
@@ -85,7 +90,7 @@ PDF goes through `pdftotext -layout -enc UTF-8 - -`, with no shell:
   - Highlighting only inserts SGR. With styling removed, a highlighted line equals the original, and it still resets before its newline
 - **Sideways** (`h` `l` `←` `→`): half a window per step, limited by the widest line. Lines are cut by display column with their SGR state kept, and a wide character cut in half becomes spaces. The status bar shows `col N` while scrolled. A search jump scrolls to its match, and an outline jump returns to column 1
 - **Outline** (`o`):
-  - The renderer records each heading's level, plain text and first output line
+  - The renderer records each heading's level, plain text and first output line. Plain labels come from semantic text, not wrapped lines, so resizing never inserts spaces inside long words
   - The list opens on the section holding the top line, and `Enter` puts the heading's line at the top, clamped at the end of the document
   - `--toc` prints the same outline, indented two spaces per level below the shallowest. Data formats have no headings
 

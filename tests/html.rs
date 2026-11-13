@@ -5,8 +5,8 @@
 
 mod common;
 
-use common::{assert_invariants, colored, plain};
-use mu::Format;
+use common::{assert_invariants, colored, plain, strip_sgr};
+use mu::{Format, Options, present_outlined};
 
 const FIXTURE: &str = include_str!("fixtures/sample.html");
 const KITCHEN_SINK: &str = include_str!("fixtures/kitchen-sink.md");
@@ -198,4 +198,158 @@ fn missing_head_end_tag_still_shows_body() {
         html("<html><head><title>T</title><h1>H</h1><p>p</p>"),
         "H\n═\n\np\n"
     );
+}
+
+#[test]
+fn heading_permalinks_do_not_interrupt_the_title_or_outline() {
+    let input = "<h2 id=\"setup\"><a href=\"#setup\" class=\"headerlink\">¶</a>Using <code>mu</code> <a href=\"#setup\">#</a></h2><p>After</p>";
+    for width in [30, 40, 80] {
+        let rendered = present_outlined(input, Format::Html, &Options::new(width, true));
+        assert_eq!(strip_sgr(&rendered.text), "Using mu\n────────\n\nAfter\n");
+        assert_eq!(rendered.headings.len(), 1);
+        assert_eq!(rendered.headings[0].text, "Using mu");
+        assert_eq!(rendered.headings[0].line, 0);
+    }
+    assert_invariants(input, Format::Html);
+}
+
+#[test]
+fn heading_fragment_links_keep_meaningful_text_and_inline_formatting() {
+    let input = "<h2><a href=\"#topic\">The <em>topic</em></a> and <strong>more</strong></h2>";
+    assert_eq!(html(input), "The topic and more\n──────────────────\n");
+    let out = colored(input, Format::Html, WIDTH);
+    assert!(out.contains("\x1b[0;1;3;94mtopic"), "{out:?}");
+    assert_invariants(input, Format::Html);
+    // Ordinary document links must still expose their destination.
+    assert_eq!(
+        html("<p><a href=\"#topic\">topic</a></p>"),
+        "topic (#topic)\n"
+    );
+}
+
+#[test]
+fn heading_breaks_separate_words_and_empty_anchors_preserve_spacing() {
+    let input = "<h2>One<br><em>two</em> <a href=\"#two\"></a>three</h2>";
+    assert_eq!(html(input), "One two three\n─────────────\n");
+    assert_invariants(input, Format::Html);
+}
+
+#[test]
+fn common_documentation_permalink_icons_do_not_become_heading_text() {
+    for anchor in [
+        "<a class=\"doc-anchor\" href=\"#title\">§</a>",
+        "<a class=\"headerlink\" href=\"#title\">\u{f0c1}</a>",
+        "<a href=\"#title\"><svg><path d=\"x\"/></svg></a>",
+    ] {
+        let input = format!("<h2>{anchor}Title</h2>");
+        assert_eq!(html(&input), "Title\n─────\n");
+        assert_invariants(&input, Format::Html);
+    }
+    assert_eq!(
+        html("<h2><a href=\"https://x.io\">Title</a></h2>"),
+        "Title (https://x.io)\n────────────────────\n"
+    );
+}
+
+#[test]
+fn successive_and_mismatched_headings_recover_without_swallowing_sections() {
+    for input in [
+        "<h1>Top<h2>Sub</h2><p>Body</p>",
+        "<h1>Top</h2><h2>Sub</h2><p>Body</p>",
+    ] {
+        assert_eq!(html(input), "Top\n═══\n\nSub\n───\n\nBody\n");
+        assert_invariants(input, Format::Html);
+    }
+}
+
+#[test]
+fn hidden_headings_do_not_suppress_the_document_title() {
+    let input = "<head><title>Visible</title></head><template><h1>Hidden</h1></template><noscript><h1>Also hidden</h1></noscript><p>Body</p>";
+    assert_eq!(html(input), "Visible\n═══════\n\nBody\n");
+    assert_invariants(input, Format::Html);
+}
+
+#[test]
+fn hidden_headings_inside_a_visible_heading_stay_hidden() {
+    let input = "<h1>Visible<template><h2>Hidden</h2></template> title</h1>";
+    assert_eq!(html(input), "Visible title\n═════════════\n");
+    assert_invariants(input, Format::Html);
+}
+
+#[test]
+fn meaningful_symbol_links_in_headings_are_not_decorative_permalinks() {
+    for input in [
+        "<h2 id=\"hash-comment\">Shell <a href=\"#hash-comment\"><code>#</code></a> comments</h2>",
+        "<h2>Shell <a href=\"#hash-comment\">#</a> comments</h2>",
+    ] {
+        assert_eq!(html(input), "Shell # comments\n────────────────\n");
+        assert_invariants(input, Format::Html);
+    }
+    for input in [
+        "<h2><a href=\"#hash-comment\">#</a></h2>",
+        "<h2 id=\"hash-comment\"><a href=\"#hash-comment\">#</a></h2>",
+        "<h2 id=\"hash-comment\"><a class=\"headerlink\" href=\"#hash-comment\">#</a></h2>",
+    ] {
+        let out = present_outlined(input, Format::Html, &Options::new(40, false));
+        assert_eq!(out.text, "#\n─\n");
+        assert_eq!(out.headings[0].text, "#");
+    }
+}
+
+#[test]
+fn hidden_descendants_do_not_change_symbol_heading_classification() {
+    for hidden in [
+        "<template>Hidden</template>",
+        "<noscript>Hidden</noscript>",
+        "<svg><title>Hidden</title></svg>",
+        "<script>Hidden</script>",
+    ] {
+        let input = format!("<h2 id=x>{hidden}<a href=#x>#</a> <a href=#x>¶</a></h2>");
+        for width in [30, 60, 80] {
+            let out = present_outlined(&input, Format::Html, &Options::new(width, true));
+            assert_eq!(strip_sgr(&out.text), "# ¶\n───\n");
+            assert_eq!(out.headings.len(), 1);
+            assert_eq!(out.headings[0].text, "# ¶");
+        }
+        assert_invariants(&input, Format::Html);
+    }
+}
+
+#[test]
+fn multi_symbol_titles_keep_their_text_and_outline() {
+    for input in [
+        "<h2 id=x><a href=#x>#</a> <a href=#x>¶</a></h2>",
+        "<h2 id=x><a class=headerlink href=#x>#</a><a class=headerlink href=#x>§</a></h2>",
+    ] {
+        for width in [30, 60, 80] {
+            let out = present_outlined(input, Format::Html, &Options::new(width, true));
+            assert_eq!(out.headings.len(), 1, "{input}: {:?}", out.text);
+            assert!(out.headings[0].text.contains('#'));
+            assert!(strip_sgr(&out.text).contains('#'));
+        }
+        assert_invariants(input, Format::Html);
+    }
+}
+
+#[test]
+fn outer_dropped_containers_close_over_unclosed_dropped_children() {
+    for input in [
+        "<template><select></template><p>Body</p>",
+        "<template><button><select></template><p>Body</p>",
+        "<noscript><select></noscript><p>Body</p>",
+    ] {
+        assert_eq!(html(input), "Body\n");
+        assert_invariants(input, Format::Html);
+    }
+}
+
+#[test]
+fn templates_inside_head_cannot_expose_hidden_headings() {
+    for input in [
+        "<head><title>Visible</title><template><h1>Hidden</h1></template></head><p>Body</p>",
+        "<head><title>Visible</title><template></head><h1>Hidden</h1></template></head><p>Body</p>",
+    ] {
+        assert_eq!(html(input), "Visible\n═══════\n\nBody\n");
+        assert_invariants(input, Format::Html);
+    }
 }

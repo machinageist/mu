@@ -3,7 +3,7 @@
 // Description: End-to-end rendering tests with exact expected output plus layout invariants
 // Notes: Exact cases run with color off; invariants sweep widths over the kitchen-sink fixture
 
-use mu::{Options, render};
+use mu::{Format, Options, present_outlined, render};
 use unicode_width::UnicodeWidthStr;
 
 const KITCHEN_SINK: &str = include_str!("fixtures/kitchen-sink.md");
@@ -47,6 +47,35 @@ fn paragraph_wraps_at_width() {
 fn long_word_is_broken_at_width() {
     let out = plain("abcdefghijklmnopqrstuvwxyz0123456789", 20);
     assert_eq!(out, "abcdefghijklmnopqrst\nuvwxyz0123456789\n");
+}
+
+#[test]
+fn heading_labels_do_not_include_layout_generated_word_breaks() {
+    let cases = [
+        (
+            Format::Markdown,
+            "> > ## Long **abcdefghijklmnop**`qrstuvwxyz0123456789XX`\n",
+        ),
+        (
+            Format::Html,
+            "<blockquote><blockquote><h2>Long <strong>abcdefghijklmnop</strong><code>qrstuvwxyz0123456789XX</code></h2></blockquote></blockquote>",
+        ),
+    ];
+    for (format, input) in cases {
+        for width in [30, 40, 80] {
+            for color in [false, true] {
+                let out = present_outlined(input, format, &Options::new(width, color));
+                assert_eq!(out.headings.len(), 1);
+                assert_eq!(
+                    out.headings[0].text,
+                    "Long abcdefghijklmnopqrstuvwxyz0123456789XX"
+                );
+                assert!(
+                    strip_sgr(out.text.lines().nth(out.headings[0].line).unwrap()).contains("Long")
+                );
+            }
+        }
+    }
 }
 
 #[test]

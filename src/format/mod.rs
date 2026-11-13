@@ -418,12 +418,15 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
 
 // Source lines, highlighted when color is on and the language is known
 fn code_lines(input: &str, options: &Options) -> Vec<data::StyledLine> {
+    if !options.color {
+        return data::code::lines(input);
+    }
     let language = options
         .language
         .as_deref()
         .and_then(highlight::language)
         .or_else(|| highlight::language_from_shebang(input));
-    match language.filter(|_| options.color) {
+    match language {
         Some(language) => highlight::highlight(
             input.trim_start_matches(data::code::BYTE_ORDER_MARK),
             language,
@@ -445,6 +448,18 @@ fn man_output(input: &str, options: &Options) -> Rendered {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_source_media_type_has_a_highlighter() {
+        for (_, types) in MEDIA_TYPES
+            .iter()
+            .filter(|(format, _)| *format == Format::Code)
+        {
+            for media_type in *types {
+                assert!(highlight::language(media_type).is_some(), "{media_type}");
+            }
+        }
+    }
 
     #[test]
     fn names_and_extensions_resolve() {

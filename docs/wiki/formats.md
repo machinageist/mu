@@ -133,7 +133,7 @@ Source files are shown line for line as written. Without this, a `.c` or `.py` f
 - Over 80 extensions are recognised: the C family, Rust, Go, Python, Ruby, JavaScript and TypeScript, CSS, JVM and .NET languages, shell scripts, SQL, diffs, and config such as `.ini` and `.conf`.
 - A piped script that starts with `#!` is recognised by that line.
 - `-f code`, or `-f text`, shows any input this way.
-- Code is syntax-highlighted when color is on. The language comes from the extension, or from the `#!` line of a script. See [Rendering](/wiki/rendering#highlighting) for the languages. Long lines hard-wrap behind a `┆` bar, like data.
+- Code is syntax-highlighted when color is on. The language comes from a source URL's supported `Content-Type`, then the extension, or from the `#!` line of a script. A leading UTF-8 BOM and `env` options or assignments do not prevent script highlighting. See [Rendering](/wiki/rendering#highlighting) for the languages. Long lines hard-wrap behind a `┆` bar, like data.
 
 ## Man pages {#man}
 

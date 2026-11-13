@@ -21,12 +21,15 @@ const ITEMREF: &str = "itemref";
 const ID: &str = "id";
 const IDREF: &str = "idref";
 const HREF: &str = "href";
+const CLASS: &str = "class";
+const LANGUAGE_ATTRS: [&str; 3] = [CLASS, "data-lang", "data-language"];
 const MEDIA_TYPE: &str = "media-type";
 const TITLE: &str = "title";
 const CREATOR: &str = "creator";
 const CHAPTER_TYPES: [&str; 2] = ["application/xhtml+xml", "text/html"];
 
 // Chapter elements that need rewriting
+const HTML: &str = "html";
 const BODY: &str = "body";
 const IMG: &str = "img";
 const IMAGE: &str = "image";
@@ -148,7 +151,12 @@ fn convert(bytes: &[u8]) -> Result<String, String> {
             continue;
         };
         let chapter = text(&chapter);
-        out.push_str(&rewrite(body(&chapter), &item.path, &archive, &media_types));
+        out.push_str(&rewrite(
+            &body(&chapter),
+            &item.path,
+            &archive,
+            &media_types,
+        ));
         out.push('\n');
     }
     out.push_str("</body></html>\n");
@@ -190,19 +198,45 @@ fn elements_text(markup: &str, name: &str) -> Vec<String> {
     out
 }
 
-// The inside of a chapter's body element, or the whole chapter without one
-fn body(chapter: &str) -> &str {
-    let mut start = None;
+// Keep body content and its language ancestors, without copying head or other attributes.
+fn body(chapter: &str) -> String {
+    let mut root = None;
+    let mut body = None;
     let mut stop = chapter.len();
-    for tag in tags(chapter).filter(|tag| tag.local() == BODY) {
-        if tag.end {
-            stop = tag.start;
-        } else if start.is_none() {
-            start = Some(tag.stop);
+    for tag in tags(chapter) {
+        match (tag.local().as_str(), tag.end) {
+            (HTML, false) if root.is_none() && body.is_none() => root = Some(tag),
+            (BODY, false) if body.is_none() => body = Some(tag),
+            (BODY, true) => stop = tag.start,
+            _ => {}
         }
     }
-    let start = start.unwrap_or(0);
-    chapter.get(start..stop.max(start)).unwrap_or(chapter)
+    let start = body.as_ref().map_or(0, |tag| tag.stop);
+    let mut out = chapter
+        .get(start..stop.max(start))
+        .unwrap_or(chapter)
+        .to_owned();
+    if let Some(body) = body {
+        // Separate, balanced wrappers retain nearest-ancestor precedence and chapter scope.
+        for tag in std::iter::once(&body).chain(root.iter()) {
+            let attributes: String = LANGUAGE_ATTRS
+                .iter()
+                .filter_map(|name| tag.attr(name).map(|value| (name, value)))
+                .map(|(name, value)| {
+                    // Values are still entity-escaped source, so do not double-escape `&`.
+                    let value = value
+                        .replace('"', "&quot;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;");
+                    format!(" {name}=\"{value}\"")
+                })
+                .collect();
+            if !attributes.is_empty() {
+                out = format!("<div{attributes}>{out}</div>");
+            }
+        }
+    }
+    out
 }
 
 // Copy a chapter body, inlining images and dropping internal link targets
@@ -232,7 +266,11 @@ fn rewrite(
                 media_types,
             )),
             (A, false) if tag.attr(HREF).is_some_and(|href| !is_external(href)) => {
-                Some(format!("<{}>", tag.name))
+                // Keep decorative-link identity after stripping the internal destination.
+                let class = tag.attr(CLASS).map_or(String::new(), |class| {
+                    format!(" class=\"{}\"", class.replace('"', "&quot;"))
+                });
+                Some(format!("<{}{class}>", tag.name))
             }
             _ => None,
         };
@@ -503,8 +541,8 @@ mod tests {
         assert_eq!(
             html,
             format!(
-                "<html><body>\n<h1>A &amp; B</h1>\n<p><em>Ann, Bo</em></p>\n\n\
-<h1>One</h1><p><img src=\"{uri}\" alt=\"Pic\"> <a>next</a> <a href=\"https://x.org\">web</a></p>\n\n\
+                "<html><body>\n<h1>A &amp; B</h1>\n<p><em>Ann, Bo</em></p>\n<div class=\"c\">\n\
+<h1>One</h1><p><img src=\"{uri}\" alt=\"Pic\"> <a>next</a> <a href=\"https://x.org\">web</a></p>\n</div>\n\
 <h1>Two</h1>Lost\n<img src=\"{uri}\" alt=\"\">\n</body></html>\n"
             )
         );

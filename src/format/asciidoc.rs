@@ -362,7 +362,17 @@ fn source_lang(attr: &str) -> String {
     positional(attr)
         .get(1)
         .filter(|lang| !lang.contains('='))
-        .map_or(String::new(), |lang| (*lang).to_owned())
+        .map_or(String::new(), |lang| {
+            let lang = *lang;
+            lang.strip_prefix('"')
+                .and_then(|lang| lang.strip_suffix('"'))
+                .or_else(|| {
+                    lang.strip_prefix('\'')
+                        .and_then(|lang| lang.strip_suffix('\''))
+                })
+                .unwrap_or(lang)
+                .to_owned()
+        })
 }
 
 // Column count from a `cols=` attribute, if any
@@ -810,7 +820,10 @@ impl Converter {
         self.flush_title(pending);
         let style = style(&attr);
         match kind {
-            Delimiter::Listing => self.code_block(source_lang(&attr), body),
+            Delimiter::Listing => {
+                let lang = self.substitute(&source_lang(&attr));
+                self.code_block(lang, body);
+            }
             Delimiter::Fence => {
                 let lang = open.trim()[FENCE.len()..].trim().to_owned();
                 self.code_block(lang, body);

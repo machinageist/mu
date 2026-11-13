@@ -8,6 +8,8 @@ use pulldown_cmark::{
     Alignment, CodeBlockKind, CowStr, Event, HeadingLevel, LinkType, Tag, TagEnd,
 };
 
+use crate::highlight;
+
 // Byte order mark allowed before the document
 const BOM: char = '\u{feff}';
 
@@ -108,12 +110,17 @@ const HEADINGS: [(&str, HeadingLevel); 6] = [
     ("h5", HeadingLevel::H5),
     ("h6", HeadingLevel::H6),
 ];
+const HEADING_PERMALINK_LABELS: [&str; 5] = ["#", "¶", "§", "🔗", "\u{f0c1}"];
+const HEADING_PERMALINK_CLASSES: [&str; 4] = ["headerlink", "doc-anchor", "anchor", "permalink"];
 
 // Attributes the walker reads
 const HREF: &str = "href";
+const ID: &str = "id";
 const SRC: &str = "src";
 const ALT: &str = "alt";
 const CLASS: &str = "class";
+const DATA_LANGUAGE: &str = "data-language";
+const DATA_LANG: &str = "data-lang";
 const START: &str = "start";
 const LANGUAGE_PREFIXES: [&str; 2] = ["language-", "lang-"];
 const DEFAULT_START: u64 = 1;
@@ -265,7 +272,7 @@ pub fn events(input: &str) -> Vec<Event<'_>> {
             out.push(Event::End(TagEnd::Heading(HeadingLevel::H1)));
         }
     }
-    block(&root.children, true, &mut out);
+    block(&root.children, true, None, &mut out);
     out
 }
 
@@ -280,11 +287,13 @@ fn is_block(name: &str) -> bool {
     TRANSPARENT_BLOCKS.contains(&name) || MAPPED_BLOCKS.contains(&name)
 }
 
-// Find the first element with a name, depth first, outside SVG
+// Find content depth first, while allowing the document title inside head.
 fn find<'a>(element: &'a Element, name: &str) -> Option<&'a Element> {
     element
         .elements()
-        .filter(|child| child.name != SVG)
+        .filter(|child| {
+            child.name == HEAD || child.name == name || !DROPPED.contains(&child.name.as_str())
+        })
         .find_map(|child| {
             if child.name == name {
                 Some(child)
@@ -294,19 +303,22 @@ fn find<'a>(element: &'a Element, name: &str) -> Option<&'a Element> {
         })
 }
 
-// Concatenate all descendant text
+// Concatenate visible descendant text, keeping a title's own raw text when asked.
 fn text_of(element: &Element) -> String {
     let mut text = String::new();
     collect_text(element, &mut text);
     text
 }
 
-// Append all descendant text to a buffer
+// Match the inline walker: hidden subtrees do not contribute semantic text.
 fn collect_text(element: &Element, out: &mut String) {
     for node in &element.children {
         match node {
             Node::Text(text) => out.push_str(text),
-            Node::Element(child) => collect_text(child, out),
+            Node::Element(child) if !DROPPED.contains(&child.name.as_str()) => {
+                collect_text(child, out)
+            }
+            Node::Element(_) => {}
         }
     }
 }
@@ -391,13 +403,35 @@ impl Builder {
 
     // Close the nearest open element with this name, ignoring stray end tags
     fn end(&mut self, name: &str) {
-        if let Some(index) = self.find_open(&[name], &[]) {
+        if HEADINGS.iter().any(|(tag, _)| *tag == name) {
+            self.close_heading();
+            return;
+        }
+        // An outer non-content container may close over an unclosed hidden child,
+        // but a visible ancestor (including head) cannot close through that boundary.
+        let stops: &[&str] = if name != HEAD && DROPPED.contains(&name) {
+            &[]
+        } else {
+            &DROPPED
+        };
+        if let Some(index) = self.find_open(&[name], stops) {
             self.close_to(index);
         }
     }
 
     // Close elements that a new start tag ends implicitly
     fn close_implied(&mut self, name: &str) {
+        // Non-content subtrees cannot implicitly close visible ancestors.
+        if self
+            .stack
+            .iter()
+            .any(|element| element.name != HEAD && DROPPED.contains(&element.name.as_str()))
+        {
+            return;
+        }
+        if HEADINGS.iter().any(|(tag, _)| *tag == name) {
+            self.close_heading();
+        }
         if !HEAD_CONTENT.contains(&name)
             && let Some(index) = self.find_open(&[HEAD], &[])
         {
@@ -418,6 +452,20 @@ impl Builder {
             && let Some(index) = self.find_open(&[P], &P_SCOPE_STOPS)
         {
             self.close_to(index);
+        }
+    }
+
+    // A new heading, or any heading end tag, closes the previous open heading.
+    fn close_heading(&mut self) {
+        for index in (1..self.stack.len()).rev() {
+            let name = self.stack[index].name.as_str();
+            if HEADINGS.iter().any(|(tag, _)| *tag == name) {
+                self.close_to(index);
+                return;
+            }
+            if DROPPED.contains(&name) && name != HEAD {
+                return;
+            }
         }
     }
 
@@ -619,6 +667,11 @@ fn start_tag(input: &str, lt: usize, builder: &mut Builder) -> usize {
     }
 }
 
+struct HeadingContext {
+    id: Option<String>,
+    only_symbol: bool,
+}
+
 // Collects inline events with collapsed whitespace and no leading or trailing breaks
 #[derive(Default)]
 struct Run {
@@ -627,6 +680,8 @@ struct Run {
     space: bool,
     brk: bool,
     content: bool,
+    // Heading fragment links are labels, not destinations to append.
+    heading: Option<HeadingContext>,
 }
 
 impl Run {
@@ -736,7 +791,12 @@ fn flush_run(run: Run, wrap: bool, out: &mut Vec<Event<'static>>) {
 }
 
 // Walk nodes in block context, grouping inline content into paragraphs
-fn block<'n>(nodes: impl IntoIterator<Item = &'n Node>, wrap: bool, out: &mut Vec<Event<'static>>) {
+fn block<'n>(
+    nodes: impl IntoIterator<Item = &'n Node>,
+    wrap: bool,
+    inherited_language: Option<&str>,
+    out: &mut Vec<Event<'static>>,
+) {
     let mut run = Run::default();
     for node in nodes {
         let element = match node {
@@ -755,16 +815,32 @@ fn block<'n>(nodes: impl IntoIterator<Item = &'n Node>, wrap: bool, out: &mut Ve
             continue;
         }
         flush_run(std::mem::take(&mut run), wrap, out);
-        block_element(element, wrap, out);
+        block_element(element, wrap, language(element).or(inherited_language), out);
     }
     flush_run(run, wrap, out);
 }
 
 // Map one block element onto events
-fn block_element(element: &Element, wrap: bool, out: &mut Vec<Event<'static>>) {
+fn block_element(
+    element: &Element,
+    wrap: bool,
+    inherited_language: Option<&str>,
+    out: &mut Vec<Event<'static>>,
+) {
     let name = element.name.as_str();
     if let Some((_, level)) = HEADINGS.iter().find(|(tag, _)| *tag == name) {
-        let mut run = Run::default();
+        let mut run = Run {
+            heading: Some(HeadingContext {
+                id: element.attr(ID).map(str::to_owned),
+                only_symbol: text_of(element).chars().all(|ch| {
+                    ch.is_whitespace()
+                        || HEADING_PERMALINK_LABELS
+                            .iter()
+                            .any(|label| label.contains(ch))
+                }),
+            }),
+            ..Run::default()
+        };
         inline_nodes(&element.children, &mut run, true);
         if let Some(events) = run.finish() {
             out.push(Event::Start(heading_tag(*level)));
@@ -779,17 +855,17 @@ fn block_element(element: &Element, wrap: bool, out: &mut Vec<Event<'static>>) {
             inline_nodes(&element.children, &mut run, false);
             flush_run(run, true, out);
         }
-        UL | OL => list(element, out),
+        UL | OL => list(element, inherited_language, out),
         BLOCKQUOTE => {
             out.push(Event::Start(Tag::BlockQuote(None)));
-            block(&element.children, true, out);
+            block(&element.children, true, inherited_language, out);
             out.push(Event::End(TagEnd::BlockQuote(None)));
         }
-        PRE => code_block(element, out),
+        PRE => code_block(element, inherited_language, out),
         HR => out.push(Event::Rule),
         TABLE => table(element, out),
-        DL => definitions(element, out),
-        _ => block(&element.children, wrap, out),
+        DL => definitions(element, inherited_language, out),
+        _ => block(&element.children, wrap, inherited_language, out),
     }
 }
 
@@ -810,10 +886,38 @@ fn styled(element: &Element, run: &mut Run, flat: bool, start: Tag<'static>, end
     run.close(end);
 }
 
+// EPUB removes internal hrefs, but keeps the classes on decorative heading links.
+fn heading_permalink(element: &Element, heading: &HeadingContext) -> bool {
+    if heading.only_symbol {
+        return false;
+    }
+    let fragment = element.attr(HREF).and_then(|href| href.strip_prefix('#'));
+    if element.attr(HREF).is_some() && fragment.is_none() {
+        return false;
+    }
+    let decorative = element.attr(CLASS).is_some_and(|classes| {
+        classes
+            .split_ascii_whitespace()
+            .any(|class| HEADING_PERMALINK_CLASSES.contains(&class))
+    });
+    let self_link = fragment.is_some() && fragment == heading.id.as_deref();
+    (decorative || self_link)
+        && HEADING_PERMALINK_LABELS.contains(&text_of(element).trim())
+        && ![CODE, KBD, SAMP, TT]
+            .iter()
+            .any(|tag| find(element, tag).is_some())
+}
+
 // Map one element inside inline content; flat turns breaks and blocks into spaces
 fn inline_element(element: &Element, run: &mut Run, flat: bool) {
     let name = element.name.as_str();
-    if DROPPED.contains(&name) {
+    if DROPPED.contains(&name)
+        || (name == A
+            && run
+                .heading
+                .as_ref()
+                .is_some_and(|heading| heading_permalink(element, heading)))
+    {
         return;
     }
     match name {
@@ -832,6 +936,9 @@ fn inline_element(element: &Element, run: &mut Run, flat: bool) {
             run.code(words.join(WORD_GAP));
         }
         A => match element.attr(HREF) {
+            Some(href) if run.heading.is_some() && href.starts_with('#') => {
+                inline_nodes(&element.children, run, flat);
+            }
             Some(href) => {
                 let tag = Tag::Link {
                     link_type: LinkType::Inline,
@@ -876,34 +983,38 @@ fn needs_paragraphs<'n>(nodes: impl IntoIterator<Item = &'n Node>) -> bool {
 }
 
 // Emit one list item around block content
-fn item(nodes: &[&Node], out: &mut Vec<Event<'static>>) {
+fn item(nodes: &[&Node], inherited_language: Option<&str>, out: &mut Vec<Event<'static>>) {
     out.push(Event::Start(Tag::Item));
     block(
         nodes.iter().copied(),
         needs_paragraphs(nodes.iter().copied()),
+        inherited_language,
         out,
     );
     out.push(Event::End(TagEnd::Item));
 }
 
 // Map ul or ol, attaching stray content to the item before it
-fn list(element: &Element, out: &mut Vec<Event<'static>>) {
+fn list(element: &Element, inherited_language: Option<&str>, out: &mut Vec<Event<'static>>) {
     let start = (element.name == OL).then(|| {
         element
             .attr(START)
             .and_then(|value| value.trim().parse().ok())
             .unwrap_or(DEFAULT_START)
     });
-    let mut items: Vec<Vec<&Node>> = Vec::new();
+    let mut items: Vec<(Vec<&Node>, Option<&str>)> = Vec::new();
     for node in &element.children {
         match node {
             Node::Element(child) if child.name == LI => {
-                items.push(child.children.iter().collect());
+                items.push((
+                    child.children.iter().collect(),
+                    language(child).or(inherited_language),
+                ));
             }
             Node::Text(text) if text.trim_ascii().is_empty() => {}
             _ => match items.last_mut() {
-                Some(last) => last.push(node),
-                None => items.push(vec![node]),
+                Some((last, _)) => last.push(node),
+                None => items.push((vec![node], inherited_language)),
             },
         }
     }
@@ -911,14 +1022,14 @@ fn list(element: &Element, out: &mut Vec<Event<'static>>) {
         return;
     }
     out.push(Event::Start(Tag::List(start)));
-    for nodes in &items {
-        item(nodes, out);
+    for (nodes, language) in &items {
+        item(nodes, *language, out);
     }
     out.push(Event::End(TagEnd::List(start.is_some())));
 }
 
 // Map dl as bold term paragraphs, each followed by its definitions as a list
-fn definitions(element: &Element, out: &mut Vec<Event<'static>>) {
+fn definitions(element: &Element, inherited_language: Option<&str>, out: &mut Vec<Event<'static>>) {
     let mut group: Vec<&Element> = Vec::new();
     for node in &element.children {
         match node {
@@ -929,7 +1040,7 @@ fn definitions(element: &Element, out: &mut Vec<Event<'static>>) {
             }
             _ => {}
         }
-        definition_list(&mut group, out);
+        definition_list(&mut group, inherited_language, out);
         match node {
             Node::Element(child) if child.name == DT => {
                 let mut run = Run::default();
@@ -938,43 +1049,71 @@ fn definitions(element: &Element, out: &mut Vec<Event<'static>>) {
                 run.close(TagEnd::Strong);
                 flush_run(run, true, out);
             }
-            _ => block([node], true, out),
+            _ => block([node], true, inherited_language, out),
         }
     }
-    definition_list(&mut group, out);
+    definition_list(&mut group, inherited_language, out);
 }
 
 // Emit and clear a group of definitions
-fn definition_list(group: &mut Vec<&Element>, out: &mut Vec<Event<'static>>) {
+fn definition_list(
+    group: &mut Vec<&Element>,
+    inherited_language: Option<&str>,
+    out: &mut Vec<Event<'static>>,
+) {
     if group.is_empty() {
         return;
     }
     out.push(Event::Start(Tag::List(None)));
     for definition in group.drain(..) {
         let nodes: Vec<&Node> = definition.children.iter().collect();
-        item(&nodes, out);
+        item(&nodes, language(definition).or(inherited_language), out);
     }
     out.push(Event::End(TagEnd::List(false)));
 }
 
-// Read a language name from a class attribute
-fn language(element: &Element) -> Option<String> {
-    element
-        .attr(CLASS)?
+// Read explicit language hints, or a bare class naming a known lexer.
+fn language(element: &Element) -> Option<&str> {
+    if let Some(name) = [DATA_LANGUAGE, DATA_LANG]
+        .into_iter()
+        .filter_map(|key| element.attr(key))
+        .map(str::trim)
+        .find(|name| !name.is_empty())
+    {
+        return Some(name);
+    }
+    let classes = element.attr(CLASS)?;
+    classes
         .split_ascii_whitespace()
         .find_map(|class| {
             LANGUAGE_PREFIXES
                 .iter()
                 .find_map(|prefix| class.strip_prefix(prefix))
+                .filter(|name| !name.is_empty())
         })
-        .map(str::to_owned)
+        .or_else(|| {
+            if !matches!(element.name.as_str(), PRE | CODE) {
+                return None;
+            }
+            classes
+                .split_ascii_whitespace()
+                .find(|class| highlight::language(class).is_some())
+        })
+}
+
+// The deepest explicit code hint wins over its enclosing code or pre element.
+fn nested_code_language(element: &Element) -> Option<&str> {
+    element
+        .elements()
+        .filter(|child| !DROPPED.contains(&child.name.as_str()))
+        .find_map(nested_code_language)
+        .or_else(|| (element.name == CODE).then(|| language(element)).flatten())
 }
 
 // Map pre as a fenced code block with its whitespace kept exactly
-fn code_block(element: &Element, out: &mut Vec<Event<'static>>) {
-    let inner_code = element.elements().find(|child| child.name == CODE);
-    let lang = language(element)
-        .or_else(|| inner_code.and_then(language))
+fn code_block(element: &Element, inherited_language: Option<&str>, out: &mut Vec<Event<'static>>) {
+    let lang = nested_code_language(element)
+        .or(inherited_language)
         .unwrap_or_default();
     let mut text = text_of(element);
     // A newline right after the opening tag is not content
@@ -988,7 +1127,7 @@ fn code_block(element: &Element, out: &mut Vec<Event<'static>>) {
         text.push(LINE_END);
     }
     out.push(Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(
-        CowStr::from(lang),
+        CowStr::from(lang.to_owned()),
     ))));
     if !text.is_empty() {
         out.push(Event::Text(CowStr::from(text)));

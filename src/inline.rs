@@ -113,6 +113,26 @@ impl Inline {
     pub fn hard_break(&mut self) {
         self.atoms.push(Atom::Break);
     }
+
+    // Plain semantic text, independent of wrapping and inline style boundaries.
+    pub fn plain_text(&self) -> String {
+        let mut out = String::with_capacity(self.arena.len());
+        let mut space = false;
+        for atom in &self.atoms {
+            match *atom {
+                Atom::Text { start, end, .. } => {
+                    if space && !out.is_empty() {
+                        out.push(' ');
+                    }
+                    out.push_str(&self.arena[start..end]);
+                    space = false;
+                }
+                Atom::Space | Atom::Break => space = true,
+                Atom::Style(_) => {}
+            }
+        }
+        out
+    }
 }
 
 // Copy text into the output, replacing control characters

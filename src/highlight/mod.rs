@@ -46,6 +46,8 @@ pub(crate) struct Language {
     pub kind: Kind,
     pub line_comments: &'static [&'static str],
     pub block_comments: &'static [(&'static str, &'static str)],
+    // Block comments may contain more comments with the same delimiter pair
+    pub nested_comments: bool,
     pub quotes: &'static [Quote],
     pub keywords: &'static [&'static str],
     pub types: &'static [&'static str],
@@ -62,6 +64,8 @@ pub(crate) struct Language {
     pub lifetimes: bool,
     // `$name` is a variable, as in shells, PHP and Perl
     pub variables: bool,
+    // A shell-style `#` comment needs whitespace before it
+    pub shell_comments: bool,
     // Capitalised identifiers are types
     pub capital_types: bool,
     // Characters allowed inside identifiers besides letters, digits and `_`
@@ -74,6 +78,7 @@ pub(crate) const BASE: Language = Language {
     kind: Kind::Generic,
     line_comments: &[],
     block_comments: &[],
+    nested_comments: false,
     quotes: &[],
     keywords: &[],
     types: &[],
@@ -84,6 +89,7 @@ pub(crate) const BASE: Language = Language {
     attributes: false,
     lifetimes: false,
     variables: false,
+    shell_comments: false,
     capital_types: false,
     ident_extra: "",
 };
@@ -140,7 +146,7 @@ const INI_SEPARATORS: [char; 2] = ['=', ':'];
 
 // Find a language by an info string or file extension, ignoring case
 pub fn language(name: &str) -> Option<&'static Language> {
-    let name = name.trim().to_ascii_lowercase();
+    let name = name.split(';').next()?.trim().to_ascii_lowercase();
     let name = name.trim_start_matches('.');
     LANGUAGES
         .iter()
@@ -149,12 +155,31 @@ pub fn language(name: &str) -> Option<&'static Language> {
 
 // Find a language from a script's `#!` line
 pub fn language_from_shebang(input: &str) -> Option<&'static Language> {
-    let first = input.lines().next()?.strip_prefix(SHEBANG)?;
+    let first = input
+        .trim_start_matches(data::code::BYTE_ORDER_MARK)
+        .lines()
+        .next()?
+        .strip_prefix(SHEBANG)?;
     let mut words = first.split_whitespace();
-    let mut program = words.next()?.rsplit('/').next()?;
-    while program == ENV_COMMAND || program == ENV_SPLIT_FLAG {
-        program = words.next()?;
+    let mut program = words.next()?;
+    if program.rsplit('/').next()? == ENV_COMMAND {
+        loop {
+            program = words.next()?;
+            match program {
+                "-u" | "--unset" | "-C" | "--chdir" => {
+                    words.next()?;
+                }
+                "--" => {
+                    program = words.next()?;
+                    break;
+                }
+                ENV_SPLIT_FLAG | "--split-string" => {}
+                _ if program.starts_with('-') || program.contains('=') => {}
+                _ => break,
+            }
+        }
     }
+    let program = program.rsplit('/').next()?;
     let program = program.trim_end_matches(|ch: char| ch.is_ascii_digit() || ch == '.');
     INTERPRETERS
         .iter()
@@ -284,13 +309,57 @@ impl<'l> Lexer<'l> {
 
     // Where a preprocessor line's directive ends: before a trailing comment
     fn preprocessor_end(&self, line: &str) -> usize {
-        let comment_starts = self
-            .language
-            .line_comments
-            .iter()
-            .chain(self.language.block_comments.iter().map(|(open, _)| open))
-            .filter_map(|marker| line.find(marker));
-        comment_starts.min().unwrap_or(line.len())
+        let mut at = 0;
+        let mut quoted: Option<&Quote> = None;
+        while at < line.len() {
+            let rest = &line[at..];
+            if let Some(quote) = quoted {
+                if quote.escapes && rest.starts_with(ESCAPE) {
+                    at += 1;
+                    at += line[at..].chars().next().map_or(0, char::len_utf8);
+                    continue;
+                }
+                if rest.starts_with(quote.close) {
+                    at += quote.close.len();
+                    quoted = None;
+                    continue;
+                }
+            } else {
+                if self
+                    .language
+                    .line_comments
+                    .iter()
+                    .any(|marker| rest.starts_with(marker))
+                    || self
+                        .language
+                        .block_comments
+                        .iter()
+                        .any(|(open, _)| rest.starts_with(open))
+                {
+                    return at;
+                }
+                let after_word = line[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|ch| is_ident_char(ch, self.language.ident_extra));
+                if !after_word && starts_number(rest) {
+                    at += preprocessor_number_len(rest);
+                    continue;
+                }
+                if let Some(quote) = self
+                    .language
+                    .quotes
+                    .iter()
+                    .find(|quote| rest.starts_with(quote.open))
+                {
+                    at += quote.open.len();
+                    quoted = Some(quote);
+                    continue;
+                }
+            }
+            at += rest.chars().next().map_or(1, char::len_utf8);
+        }
+        line.len()
     }
 
     // Lex one token starting at `at`, returning where the next one starts
@@ -299,10 +368,20 @@ impl<'l> Lexer<'l> {
         let language = self.language;
         let previous = line[..at].chars().next_back();
 
+        // A block opener can start with the line marker (`--[[`, `#[`, `#=`).
+        if let Some(index) = language
+            .block_comments
+            .iter()
+            .position(|(open, _)| rest.starts_with(open))
+        {
+            let open_len = language.block_comments[index].0.len();
+            push_span(spans, STYLE_CODE_COMMENT, &rest[..open_len]);
+            return self.continue_comment(line, at + open_len, index, 1, spans);
+        }
         // Line comments run to the end of the line
         // A shell `#` needs a blank before it, and a word marker such as `rem` a word break
         let comment_allowed = |marker: &str| {
-            let shell_hash = language.variables && marker == SHELL_COMMENT;
+            let shell_hash = language.shell_comments && marker == SHELL_COMMENT;
             let wordy = marker.starts_with(char::is_alphabetic);
             (!shell_hash || previous.is_none_or(char::is_whitespace))
                 && (!wordy || previous.is_none_or(|ch| !is_ident_char(ch, "")))
@@ -314,15 +393,6 @@ impl<'l> Lexer<'l> {
         {
             push_span(spans, STYLE_CODE_COMMENT, rest);
             return line.len();
-        }
-        if let Some(index) = language
-            .block_comments
-            .iter()
-            .position(|(open, _)| rest.starts_with(open))
-        {
-            let open_len = language.block_comments[index].0.len();
-            push_span(spans, STYLE_CODE_COMMENT, &rest[..open_len]);
-            return self.continue_comment(line, at + open_len, index, 1, spans);
         }
         if language.attributes
             && (rest.starts_with(ATTRIBUTE_OPEN) || rest.starts_with(INNER_ATTRIBUTE_OPEN))
@@ -357,7 +427,13 @@ impl<'l> Lexer<'l> {
         }
         if language.variables && first == VARIABLE {
             let end = variable_len(rest);
-            push_span(spans, STYLE_CODE_VARIABLE, &rest[..end]);
+            let word = &rest[..end];
+            let style = if self.word_style(word, "") == STYLE_CODE_CONSTANT {
+                STYLE_CODE_CONSTANT
+            } else {
+                STYLE_CODE_VARIABLE
+            };
+            push_span(spans, style, word);
             return at + end;
         }
         let after_word = previous.is_some_and(|ch| is_ident_char(ch, language.ident_extra));
@@ -366,7 +442,13 @@ impl<'l> Lexer<'l> {
             push_span(spans, STYLE_CODE_NUMBER, &rest[..end]);
             return at + end;
         }
-        if !after_word && is_ident_start(first) {
+        // Listed constants such as Scheme's `#t` may start with identifier punctuation.
+        let constant_start = language.ident_extra.contains(first)
+            && language
+                .constants
+                .iter()
+                .any(|word| word.starts_with(first));
+        if !after_word && (is_ident_start(first) || constant_start) {
             let end = ident_len(rest, language.ident_extra);
             let word = &rest[..end];
             let style = self.word_style(word, &rest[end..]);
@@ -422,7 +504,7 @@ impl<'l> Lexer<'l> {
         spans: &mut Vec<Span>,
     ) -> usize {
         let (open, close) = self.language.block_comments[index];
-        let nests = open != close && NESTING_COMMENTS.contains(&open);
+        let nests = self.language.nested_comments && open != close;
         let start = at;
         while at < line.len() {
             let rest = &line[at..];
@@ -476,9 +558,6 @@ impl<'l> Lexer<'l> {
     }
 }
 
-// Block comment openers that nest, as in Rust, Swift, Haskell and OCaml
-const NESTING_COMMENTS: [&str; 2] = ["/*", "{-"];
-
 // True when `'` starts a lifetime or label, not a character literal
 fn is_lifetime(rest: &str) -> bool {
     let mut chars = rest.chars().skip(1);
@@ -513,6 +592,27 @@ fn starts_number(rest: &str) -> bool {
         Some(DECIMAL_POINT) => chars.next().is_some_and(|ch| ch.is_ascii_digit()),
         _ => false,
     }
+}
+
+// Preprocessing numbers are maximal tokens, including hex fractions and separators.
+// This deliberately does not validate the literal's base, suffix or value.
+fn preprocessor_number_len(text: &str) -> usize {
+    let mut chars = text.char_indices().peekable();
+    let mut previous = '\0';
+    let mut end = 0;
+    while let Some((at, ch)) = chars.next() {
+        let separator = ch == LIFETIME
+            && chars
+                .peek()
+                .is_some_and(|(_, next)| is_ident_char(*next, ""));
+        let exponent_sign = NUMBER_SIGNS.contains(&ch) && matches!(previous, 'e' | 'E' | 'p' | 'P');
+        if !(is_ident_char(ch, "") || ch == DECIMAL_POINT || separator || exponent_sign) {
+            break;
+        }
+        end = at + ch.len_utf8();
+        previous = ch;
+    }
+    end
 }
 
 // Byte length of a number literal, with any suffix such as `u32` or `px`
@@ -612,7 +712,70 @@ mod tests {
     #[test]
     fn every_source_extension_has_a_language() {
         for extension in crate::format::code_extensions() {
-            assert!(language(extension).is_some(), "no lexer for .{extension}");
+            let language =
+                language(extension).unwrap_or_else(|| panic!("no lexer for .{extension}"));
+            // Literal examples exercise each lexer, not just its name-table entry.
+            let sample = match language.names[0] {
+                "c" | "cpp" | "objc" => "int main(void) { return 42; } // é",
+                "rust" => "fn main() {\n\tlet message = \"é\";\n}",
+                "go" => "package main\nfunc main() {\n\tprintln(\"é\")\n}",
+                "zig" => "const message = \"é\";",
+                "nim" | "fsharp" | "ocaml" | "swift" => "let message = \"é\"",
+                "asm" => "mov eax, 42 ; é",
+                "python" => "def f():\n\treturn \"é\"",
+                "ruby" => "def f\n\t\"é\"\nend",
+                "perl" => "my $message = \"é\";",
+                "php" => "<?php\necho \"é\";",
+                "lua" => "local message = \"é\"",
+                "r" => "if (TRUE) {\n\t\"é\"\n}",
+                "julia" => "function f()\n\t\"é\"\nend",
+                "javascript" | "typescript" => "const message = \"é\";",
+                "css" => "body {\n\tcolor: inherit;\n\tcontent: \"é\";\n}",
+                "java" => "class Example {\n\tString message = \"é\";\n}",
+                "kotlin" => "fun f() = \"é\"",
+                "scala" => "def f = \"é\"",
+                "groovy" => "def message = \"é\"",
+                "csharp" => "class Example {\n\tstring message = \"é\";\n}",
+                "haskell" => "main = do\n\tputStrLn \"é\"",
+                "elixir" => "def f do\n\t\"é\"\nend",
+                "erlang" => "case value of\n\t_ -> \"é\"\nend.",
+                "lisp" => "(define message \"é\")",
+                "dart" => "var message = \"é\";",
+                "sh" => "if true; then\n\techo \"é\"\nfi",
+                "fish" => "if true\n\techo \"é\"\nend",
+                "powershell" => "$message = \"é\"\nif ($true) { $message }",
+                "batch" => "if defined message echo \"é\"",
+                "sql" => "SELECT 'é';",
+                "diff" => "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+é",
+                "vim" => "let message = 'é'",
+                "make" => "include café.mk\nall:\n\techo \"é\"",
+                "cmake" => "set(message \"é\")",
+                "protobuf" => "syntax = \"proto3\";\nmessage Example { string text = 1; } // é",
+                "graphql" => "query {\n\tfield(text: \"é\")\n}",
+                "hcl" => "variable \"message\" {\n\tdefault = \"é\"\n}",
+                "nix" => "let message = \"é\"; in message",
+                "ini" => "[section]\nmessage = é",
+                "xml" => "<p title=\"é\">\n\té\n</p>",
+                name => panic!("no source sample for {name} (.{extension})"),
+            };
+            let code = format!("\t{sample}  \n\n");
+            let highlighted = highlight(&code, language);
+            assert!(
+                highlighted
+                    .iter()
+                    .flatten()
+                    .any(|(style, text)| { *style != Style::PLAIN && !text.trim().is_empty() }),
+                "no styles emitted for .{extension}"
+            );
+            let text: Vec<String> = highlighted
+                .into_iter()
+                .map(|line| line.into_iter().map(|(_, text)| text).collect())
+                .collect();
+            assert_eq!(
+                text,
+                code.lines().collect::<Vec<_>>(),
+                "lexer changed text for .{extension}"
+            );
         }
     }
 
@@ -635,6 +798,150 @@ mod tests {
                 ("b */", "comment"),
             ])
         );
+    }
+
+    #[test]
+    fn preprocessor_comment_markers_inside_quotes_are_not_comments() {
+        for name in ["c", "cpp", "objc", "csharp"] {
+            for directive in [
+                r#"#define X "/*""#,
+                r#"#define URL "http://example.test""#,
+                r#"#define ESCAPED "\"/*""#,
+                "#define SLASH '/'",
+                "#define DIGIT '1'",
+                r"#define APOSTROPHE '\''",
+                r"#define BACKSLASH '\\'",
+                r"#define ESCAPED_DIGIT '\1'",
+                "#define WIDE_SLASH L'/'",
+                "#define UTF8_SLASH u8'/'",
+                "#define UTF8_DIGIT u8'1'",
+                "#define NUMERIC_CHAR 42'/'",
+                "#define HEX_CHAR 0xF'/'",
+                "#define MIXED 1'000 + '/' + 0xA'B + u8'1'",
+                r"#define MIXED_ESCAPE 1'000 + '\'' + 0xA'B",
+            ] {
+                assert_eq!(
+                    tokens(&format!("{directive}\nint x;"), name),
+                    expect(&[(directive, "meta"), ("int", "type")]),
+                    "{name}: {directive}"
+                );
+                assert_eq!(
+                    tokens(&format!("{directive} // trailing\nint x;"), name),
+                    expect(&[
+                        (directive, "meta"),
+                        ("// trailing", "comment"),
+                        ("int", "type"),
+                    ]),
+                    "{name}: {directive} with a line comment"
+                );
+                assert_eq!(
+                    tokens(&format!("{directive} /* trailing\nend */ int x;"), name),
+                    expect(&[
+                        (directive, "meta"),
+                        ("/* trailing", "comment"),
+                        ("end */", "comment"),
+                        ("int", "type"),
+                    ]),
+                    "{name}: {directive} with a block comment"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preprocessor_hex_fraction_separators_do_not_hide_real_comments() {
+        for number in ["0xA.B'Cp+0", "0x1.F'Fp-2", "0xA.B'C'Dp+0"] {
+            let directive = format!("#define N {number}");
+            assert_eq!(
+                tokens(
+                    &format!("{directive} /* real comment\nreturn\n*/ int x;"),
+                    "cpp"
+                ),
+                expect(&[
+                    (&directive, "meta"),
+                    ("/* real comment", "comment"),
+                    ("return", "comment"),
+                    ("*/", "comment"),
+                    ("int", "type"),
+                ])
+            );
+        }
+    }
+
+    #[test]
+    fn preprocessor_decimal_separators_before_line_comments() {
+        for name in ["cpp", "c"] {
+            for number in ["1'000", "1'000'000", "12'345.6'789"] {
+                let directive = format!("#define N {number}");
+                assert_eq!(
+                    tokens(&format!("{directive} // real comment\nint x;"), name),
+                    expect(&[
+                        (&directive, "meta"),
+                        ("// real comment", "comment"),
+                        ("int", "type"),
+                    ]),
+                    "{name}: {number}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preprocessor_decimal_separators_before_block_comments() {
+        for name in ["cpp", "c"] {
+            for number in ["1'000", "1'000'000", "12'345.6'789"] {
+                let directive = format!("#define N {number}");
+                assert_eq!(
+                    tokens(&format!("{directive} /* comment\nreturn\n*/ int x;"), name),
+                    expect(&[
+                        (&directive, "meta"),
+                        ("/* comment", "comment"),
+                        ("return", "comment"),
+                        ("*/", "comment"),
+                        ("int", "type"),
+                    ]),
+                    "{name}: {number}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preprocessor_hex_separators_before_line_comments() {
+        for name in ["cpp", "c"] {
+            for number in ["0xA'B", "0X1'F", "0xA'B'C", "0xDEAD'BEEF"] {
+                let directive = format!("#define N {number}");
+                assert_eq!(
+                    tokens(&format!("{directive} // real comment\nint x;"), name),
+                    expect(&[
+                        (&directive, "meta"),
+                        ("// real comment", "comment"),
+                        ("int", "type"),
+                    ]),
+                    "{name}: {number}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preprocessor_hex_separators_before_block_comments() {
+        for name in ["cpp", "c"] {
+            for number in ["0xA'B", "0X1'F", "0xA'B'C", "0xDEAD'BEEF"] {
+                let directive = format!("#define N {number}");
+                assert_eq!(
+                    tokens(&format!("{directive} /* comment\nreturn\n*/ int x;"), name),
+                    expect(&[
+                        (&directive, "meta"),
+                        ("/* comment", "comment"),
+                        ("return", "comment"),
+                        ("*/", "comment"),
+                        ("int", "type"),
+                    ]),
+                    "{name}: {number}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -693,6 +1000,71 @@ mod tests {
     }
 
     #[test]
+    fn hash_comment_boundaries_are_only_for_shells() {
+        for name in ["perl", "php", "graphql"] {
+            assert_eq!(
+                tokens("value# comment", name),
+                expect(&[("# comment", "comment")]),
+                "{name}: after an identifier"
+            );
+            assert_eq!(
+                tokens("$value;# comment", name),
+                expect(&[("$value", "variable"), ("# comment", "comment")]),
+                "{name}: after punctuation"
+            );
+        }
+        for name in ["sh", "fish", "powershell"] {
+            assert_eq!(
+                tokens("value#suffix $value#suffix # comment", name),
+                expect(&[("$value", "variable"), ("# comment", "comment")]),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn powershell_constants_do_not_hide_ordinary_variables() {
+        assert_eq!(
+            tokens(
+                "$true $FALSE $Null $trueValue $false_value $nullish $value ${true}",
+                "powershell"
+            ),
+            expect(&[
+                ("$true", "constant"),
+                ("$FALSE", "constant"),
+                ("$Null", "constant"),
+                ("$trueValue", "variable"),
+                ("$false_value", "variable"),
+                ("$nullish", "variable"),
+                ("$value", "variable"),
+                ("${true}", "variable"),
+            ])
+        );
+        for name in ["sh", "perl", "php", "graphql"] {
+            assert_eq!(
+                tokens("$true $false $null", name),
+                expect(&[
+                    ("$true", "variable"),
+                    ("$false", "variable"),
+                    ("$null", "variable"),
+                ]),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn scheme_boolean_constants_need_identifier_boundaries() {
+        assert_eq!(
+            tokens(
+                "#t #f #true #false #f? #t_value prefix#t suffix#f",
+                "scheme"
+            ),
+            expect(&[("#t", "constant"), ("#f", "constant")])
+        );
+    }
+
+    #[test]
     fn sql_ignores_case() {
         assert_eq!(
             tokens("select 1 FROM t -- c", "sql"),
@@ -729,10 +1101,70 @@ mod tests {
 
     #[test]
     fn nested_comments_close_at_the_right_depth() {
-        assert_eq!(
-            tokens("/* a /* b */ c */ fn", "rust"),
-            expect(&[("/* a /* b */ c */", "comment"), ("fn", "keyword")])
-        );
+        for (name, open, close, keyword) in [
+            ("rust", "/*", "*/", "fn"),
+            ("swift", "/*", "*/", "func"),
+            ("kotlin", "/*", "*/", "fun"),
+            ("scala", "/*", "*/", "def"),
+            ("dart", "/*", "*/", "return"),
+            ("sql", "/*", "*/", "select"),
+            ("haskell", "{-", "-}", "let"),
+            ("ocaml", "(*", "*)", "let"),
+            ("fsharp", "(*", "*)", "let"),
+            ("nim", "#[", "]#", "let"),
+            ("julia", "#=", "=#", "function"),
+            ("lisp", "#|", "|#", "defun"),
+        ] {
+            let comment = format!("{open} outer {open} inner {close} tail {close}");
+            assert_eq!(
+                tokens(&format!("{comment} {keyword}"), name),
+                expect(&[(&comment, "comment"), (keyword, "keyword")]),
+                "{name}: inline nesting"
+            );
+            let first = format!("{open} outer {open} inner {close} {keyword} hidden");
+            let second = format!("still hidden {close}");
+            assert_eq!(
+                tokens(&format!("{first}\n{second} {keyword}\n{keyword}"), name),
+                expect(&[
+                    (&first, "comment"),
+                    (&second, "comment"),
+                    (keyword, "keyword"),
+                    (keyword, "keyword"),
+                ]),
+                "{name}: multiline nesting"
+            );
+        }
+    }
+
+    #[test]
+    fn non_nesting_comments_end_at_the_first_closer() {
+        for (name, keyword) in [
+            ("c", "return"),
+            ("cpp", "return"),
+            ("objc", "return"),
+            ("go", "return"),
+            ("javascript", "return"),
+            ("typescript", "return"),
+            ("css", "inherit"),
+            ("java", "return"),
+            ("groovy", "return"),
+            ("csharp", "return"),
+            ("php", "return"),
+            ("protobuf", "message"),
+            ("hcl", "resource"),
+            ("nix", "let"),
+            ("asm", "mov"),
+        ] {
+            assert_eq!(
+                tokens(&format!("/* outer /* inner */ {keyword}\n{keyword}"), name),
+                expect(&[
+                    ("/* outer /* inner */", "comment"),
+                    (keyword, "keyword"),
+                    (keyword, "keyword"),
+                ]),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -741,6 +1173,42 @@ mod tests {
         assert_eq!(name("#!/bin/bash\n"), Some("sh"));
         assert_eq!(name("#!/usr/bin/env python3\n"), Some("python"));
         assert_eq!(name("#!/usr/bin/env -S node --flag\n"), Some("javascript"));
+        for (input, expected) in [
+            ("\u{feff}#!/bin/bash\r\n", "sh"),
+            ("#! /usr/bin/python3.12\n", "python"),
+            ("#!/usr/bin/env -i MODE=test python3 -u\n", "python"),
+            ("#!/usr/bin/env -u python -C ruby node\n", "javascript"),
+            ("#!/usr/bin/env --unset python --chdir ruby perl\n", "perl"),
+            ("#!/usr/bin/env --unset=OLD --chdir=/work ruby\n", "ruby"),
+            ("#!/usr/bin/env -- /usr/bin/python3.12\n", "python"),
+            ("#!/usr/bin/env MODE=test /opt/bin/node\n", "javascript"),
+            ("#!/usr/bin/env --split-string python3 -u\n", "python"),
+            (
+                "\u{feff}#!/usr/bin/env -u OLD -C /work MODE=test -S python3.12 -u\r\n",
+                "python",
+            ),
+        ] {
+            assert_eq!(name(input), Some(expected), "{input:?}");
+        }
+        for input in [
+            "",
+            "#!",
+            "#!/usr/bin/env\n",
+            "#!/usr/bin/env -u\n",
+            "#!/usr/bin/env --unset python\n",
+            "#!/usr/bin/env -C\n",
+            "#!/usr/bin/env --chdir python\n",
+            "#!/usr/bin/env -S\n",
+            "#!/usr/bin/env --split-string\n",
+            "#!/usr/bin/env --\n",
+            "#!/usr/bin/env MODE=test\n",
+            "\u{feff}",
+            "\u{feff}\n#!/bin/bash\n",
+            "\u{feff} #!/bin/bash\n",
+            "# comment\n#!/bin/bash\n",
+        ] {
+            assert_eq!(name(input), None, "{input:?}");
+        }
         assert_eq!(name("#!/opt/thing\n"), None);
         assert_eq!(name("no shebang"), None);
     }
@@ -755,6 +1223,29 @@ mod tests {
                 .collect();
             let expected: Vec<&str> = code.lines().collect();
             assert_eq!(text, expected, "{:?}", language.names);
+        }
+    }
+
+    #[test]
+    fn block_comments_take_precedence_over_shorter_line_markers() {
+        for (name, open, close, keyword) in [
+            ("lua", "--[[", "]]", "local"),
+            ("nim", "#[", "]#", "let"),
+            ("julia", "#=", "=#", "function"),
+        ] {
+            assert_eq!(
+                tokens(
+                    &format!("{open} note\n{keyword} hidden\n{close}\n{keyword}"),
+                    name
+                ),
+                expect(&[
+                    (&format!("{open} note"), "comment"),
+                    (&format!("{keyword} hidden"), "comment"),
+                    (close, "comment"),
+                    (keyword, "keyword"),
+                ]),
+                "{name}"
+            );
         }
     }
 }
