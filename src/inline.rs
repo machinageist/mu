@@ -37,6 +37,8 @@ pub enum Atom {
 pub struct Line {
     pub text: String,
     pub width: usize,
+    // The first positive-width non-whitespace glyph, excluding gutters and borders.
+    pub first_content_column: Option<usize>,
     pub anchors: Vec<(String, usize)>,
     pub links: Vec<(usize, usize)>,
 }
@@ -153,6 +155,26 @@ impl Inline {
         self.plain_text_from(0)
     }
 
+    // IDs after the last painted atom belong to following content, not this run's end.
+    pub(crate) fn trailing_anchors(&self, start: usize) -> impl Iterator<Item = &str> {
+        let end = self
+            .atoms
+            .iter()
+            .enumerate()
+            .skip(start)
+            .rfind(|(_, atom)| match **atom {
+                Atom::Text { start, end, .. } => {
+                    first_content_column(&self.arena[start..end]).is_some()
+                }
+                _ => false,
+            })
+            .map_or(start, |(index, _)| index + 1);
+        self.atoms[end..].iter().filter_map(|atom| match *atom {
+            Atom::Anchor { start, end } => Some(&self.arena[start..end]),
+            _ => None,
+        })
+    }
+
     // Collect a semantic label without exposing link targets or anchors
     pub fn plain_text_from(&self, start: usize) -> String {
         // A short link label must not reserve the entire paragraph's text and URI arena
@@ -200,6 +222,13 @@ pub fn text_width(text: &str) -> usize {
     } else {
         UnicodeWidthStr::width(text)
     }
+}
+
+// Spacing and zero-width characters still render, but cannot receive a destination.
+fn first_content_column(text: &str) -> Option<usize> {
+    text.char_indices()
+        .find(|(_, ch)| !ch.is_whitespace() && ch.width().unwrap_or(0) > 0)
+        .map(|(offset, _)| text_width(&text[..offset]))
 }
 
 // Find where the word starting at `start` ends and how wide it is
@@ -257,6 +286,7 @@ struct LineBuilder<'a> {
     lines: Vec<Line>,
     text: String,
     width: usize,
+    first_content_column: Option<usize>,
     style: Style,
     emitted: Style,
     color: bool,
@@ -275,6 +305,7 @@ impl<'a> LineBuilder<'a> {
             lines: Vec::new(),
             text: String::new(),
             width: 0,
+            first_content_column: None,
             style: base,
             emitted: Style::PLAIN,
             color,
@@ -288,14 +319,18 @@ impl<'a> LineBuilder<'a> {
     }
 
     // Bring the terminal up to the wanted style before writing text
-    fn sync_style(&mut self) {
+    fn sync_style(&mut self, content_column: Option<usize>) {
         // A following character may wrap first; bind its anchors only after that decision
-        self.anchors
-            .extend(self.pending_anchors.drain(..).map(|id| (id, self.width)));
-        if let Some(index) = self.navigation
-            && self.links.last().map(|(key, _)| *key) != Some(index)
-        {
-            self.links.push((index, self.width));
+        if let Some(offset) = content_column {
+            let column = self.width + offset;
+            self.first_content_column.get_or_insert(column);
+            self.anchors
+                .extend(self.pending_anchors.drain(..).map(|id| (id, column)));
+            if let Some(index) = self.navigation
+                && self.links.last().map(|(key, _)| *key) != Some(index)
+            {
+                self.links.push((index, column));
+            }
         }
         if self.link != self.emitted_link {
             self.close_link();
@@ -335,6 +370,7 @@ impl<'a> LineBuilder<'a> {
         self.lines.push(Line {
             text,
             width: self.width,
+            first_content_column: self.first_content_column.take(),
             anchors: std::mem::take(&mut self.anchors),
             links: std::mem::take(&mut self.links),
         });
@@ -348,9 +384,16 @@ impl<'a> LineBuilder<'a> {
 
     // Append a run of text that is known to fit
     fn push(&mut self, text: &str, width: usize) {
-        self.sync_style();
+        self.sync_style(first_content_column(text));
         self.text.push_str(text);
         self.width += width;
+    }
+
+    // Collapsed whitespace separates content but cannot consume its pending identities.
+    fn space(&mut self) {
+        self.sync_style(None);
+        self.text.push(' ');
+        self.width += 1;
     }
 
     // Append text one character at a time, breaking wherever the line fills
@@ -360,7 +403,7 @@ impl<'a> LineBuilder<'a> {
             if self.width + ch_width > limit && self.width > 0 {
                 self.newline();
             }
-            self.sync_style();
+            self.sync_style((!ch.is_whitespace() && ch_width > 0).then_some(0));
             self.text.push(ch);
             self.width += ch_width;
         }
@@ -368,13 +411,12 @@ impl<'a> LineBuilder<'a> {
 
     // Close the last line and hand back everything
     fn finish(mut self) -> Vec<Line> {
-        self.anchors
-            .extend(self.pending_anchors.drain(..).map(|id| (id, self.width)));
         self.close_style();
         let text = std::mem::take(&mut self.text);
         self.lines.push(Line {
             text,
             width: self.width,
+            first_content_column: self.first_content_column,
             anchors: self.anchors,
             links: self.links,
         });
@@ -408,7 +450,7 @@ pub fn wrap(atoms: &[Atom], arena: &str, limit: usize, base: Style, color: bool)
                 if word_width > 0 {
                     if pending_space {
                         if builder.width + 1 + word_width <= limit {
-                            builder.push(" ", 1);
+                            builder.space();
                         } else {
                             builder.newline();
                         }

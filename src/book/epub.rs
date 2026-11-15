@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use pulldown_cmark::{Event, Parser};
+
 use super::zip::Archive;
 use crate::image::base64;
 use crate::image::source::percent_decode;
@@ -551,9 +553,12 @@ fn rewrite(
                     {
                         anchor_id(chapter_path, Some(&decode_entities(value)))
                     } else if local == A && name.eq_ignore_ascii_case(HREF) {
-                        let href = decode_entities(value);
+                        let href = decode_entities(value.trim_matches(' '));
                         if is_external(href.trim()) {
-                            replacement.push_str(&format!(" {name}=\"{}\"", escape_source(value)));
+                            // Re-escape the decoded value for HTML, not another entity pass.
+                            // Keep the source scheme and unsafe/repaired chars for validation.
+                            let value = escape_source(&href.replace('&', "&amp;"));
+                            replacement.push_str(&format!(" {name}=\"{value}\""));
                             continue;
                         }
                         let Some(target) = internal_target(chapter_path, &href, chapter_paths)
@@ -622,7 +627,6 @@ fn internal_target(from: &str, href: &str, chapters: &HashSet<&str>) -> Option<S
     if invalid_internal_text(href) {
         return None;
     }
-    let href = href.trim();
     let (path, fragment) = href
         .split_once('#')
         .map_or((href, None), |(path, fragment)| (path, Some(fragment)));
@@ -697,18 +701,15 @@ fn is_external(href: &str) -> bool {
     })
 }
 
-// Resolve an href against the file it appears in, giving a path inside the zip
+// Resolve an href against its source file. Trim literal URI padding before decoding,
+// never decoded NBSP/spaces that belong to the path's identity.
 fn resolve(from: &str, href: &str) -> Option<String> {
-    resolve_decoded(from, &decode_entities(href))
+    resolve_decoded(from, &decode_entities(href.trim_ascii()))
 }
 
 // Hrefs are entity-decoded once, before separating their URI components.
 fn resolve_decoded(from: &str, href: &str) -> Option<String> {
-    let href = href
-        .trim()
-        .split(QUERY_OR_FRAGMENT)
-        .next()
-        .unwrap_or_default();
+    let href = href.split(QUERY_OR_FRAGMENT).next().unwrap_or_default();
     let before_slash = href.split(SEPARATOR).next().unwrap_or_default();
     if href.is_empty() || href.starts_with("//") || before_slash.contains(SCHEME_MARK) {
         return None;
@@ -739,7 +740,7 @@ fn resolve_decoded(from: &str, href: &str) -> Option<String> {
     Some(parts.join(SEPARATOR))
 }
 
-// XML character references used in package paths and XHTML IDs/hrefs.
+// Decode character references once, preserving whitespace and literal entity spellings.
 fn decode_entities(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -748,30 +749,36 @@ fn decode_entities(raw: &str) -> String {
         rest = &rest[amp..];
         let decoded = rest
             .bytes()
-            .take(13)
+            // The longest HTML named reference has 31 ASCII letters, plus `&` and `;`.
+            .take(if rest.starts_with("&#") { 13 } else { 33 })
             .position(|byte| byte == b';')
             .and_then(|end| {
                 let name = &rest[1..end];
-                let ch = match name {
-                    "amp" => '&',
-                    "lt" => '<',
-                    "gt" => '>',
-                    "quot" => '"',
-                    "apos" => '\'',
-                    _ => {
-                        let number = name.strip_prefix('#')?;
-                        let code = match number.strip_prefix(['x', 'X']) {
-                            Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-                            None => number.parse().ok()?,
-                        };
-                        char::from_u32(code)?
+                let value = if let Some(number) = name.strip_prefix('#') {
+                    // Retain XML numeric semantics rather than HTML's control-code repair.
+                    let code = match number.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                        None => number.parse().ok()?,
+                    };
+                    char::from_u32(code)?.to_string()
+                } else {
+                    if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+                        return None;
                     }
+                    // The entity lookup is private in pulldown-cmark. Parse only this
+                    // validated reference, never an ID/path whose Markdown punctuation
+                    // or whitespace would otherwise be interpreted. Unknown names stay
+                    // literal, and multi-scalar expansions remain intact.
+                    Parser::new(&rest[..end + 1]).find_map(|event| match event {
+                        Event::Text(value) => Some(value.into_string()),
+                        _ => None,
+                    })?
                 };
-                Some((ch, end + 1))
+                Some((value, end + 1))
             });
         match decoded {
-            Some((ch, length)) => {
-                out.push(ch);
+            Some((value, length)) => {
+                out.push_str(&value);
                 rest = &rest[length..];
             }
             None => {

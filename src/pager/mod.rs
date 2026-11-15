@@ -28,7 +28,7 @@ use crate::term::{self, Size};
 use keys::parse_keys;
 use keys::{Action, CTRL_C, CTRL_U, Decoder, Key, normal_action};
 use outline::Outline;
-use search::{Direction, Hit, Search, Token, highlight, strip_sgr, tokens};
+use search::{Direction, Hit, Match, Search, Token, highlight, strip_sgr, tokens};
 
 const TTY_PATH: &str = "/dev/tty";
 
@@ -191,7 +191,10 @@ struct Pager {
     document: Document,
     headings: Vec<Heading>,
     anchors: HashMap<String, (usize, usize)>,
+    // Keep source encounter order stable; layout order may change when table cells reflow
     links: Vec<NavigationLink>,
+    link_order: Vec<usize>,
+    // Selection indexes link_order; return history indexes the stable source vector
     selected_link: Option<usize>,
     history: VecDeque<Visit>,
     view: View,
@@ -223,6 +226,7 @@ impl Pager {
             headings: rendered.headings,
             anchors: HashMap::new(),
             links: Vec::new(),
+            link_order: Vec::new(),
             selected_link: None,
             history: VecDeque::new(),
             view,
@@ -336,7 +340,6 @@ impl Pager {
         links.retain(|link| {
             link.line < self.document.len() && self.anchors.contains_key(&link.target)
         });
-        links.sort_by_key(|link| link.line);
         for link in &mut links {
             let plain: String = link.label.chars().filter(|ch| !ch.is_control()).collect();
             link.label = plain.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -369,32 +372,61 @@ impl Pager {
             true
         });
         self.links = links;
+        self.link_order = (0..self.links.len()).collect();
+        self.link_order.sort_by_key(|&source| {
+            let link = &self.links[source];
+            (link.line, link.column)
+        });
         self.selected_link = None;
     }
 
     // Cycle through source links in document order, starting at the current viewport.
     fn select_link(&mut self, reverse: bool) {
-        let count = self.links.len();
+        let count = self.link_order.len();
         if count == 0 {
             return;
         }
         let index = match self.selected_link {
             Some(index) if reverse => (index + count - 1) % count,
             Some(index) => (index + 1) % count,
-            None if reverse => self
-                .links
-                .iter()
-                .rposition(|link| link.line < self.view.top)
-                .unwrap_or(count - 1),
-            None => self
-                .links
-                .iter()
-                .position(|link| link.line >= self.view.top)
-                .unwrap_or(0),
+            None => {
+                let visible = |&source: &usize| {
+                    let link = &self.links[source];
+                    (self.view.top..self.view.top.saturating_add(self.view.rows))
+                        .contains(&link.line)
+                        && (self.left..self.left.saturating_add(self.columns))
+                            .contains(&link.column)
+                };
+                let on_screen = if reverse {
+                    self.link_order.iter().rposition(visible)
+                } else {
+                    self.link_order.iter().position(visible)
+                };
+                on_screen.unwrap_or_else(|| {
+                    let point = (self.view.top, self.left);
+                    if reverse {
+                        self.link_order
+                            .iter()
+                            .rposition(|&source| {
+                                let link = &self.links[source];
+                                (link.line, link.column) < point
+                            })
+                            .unwrap_or(count - 1)
+                    } else {
+                        self.link_order
+                            .iter()
+                            .position(|&source| {
+                                let link = &self.links[source];
+                                (link.line, link.column) >= point
+                            })
+                            .unwrap_or(0)
+                    }
+                })
+            }
         };
         self.selected_link = Some(index);
-        self.view.show(self.links[index].line);
-        let link = &self.links[index];
+        let link = &self.links[self.link_order[index]];
+        self.view.show(link.line);
         let available = self.document.line(link.line).map_or(0, |line| {
             strip_sgr(line).width().saturating_sub(link.column)
         });
@@ -417,9 +449,12 @@ impl Pager {
         let Some(index) = self.selected_link.take() else {
             return;
         };
+        let Some(&source) = self.link_order.get(index) else {
+            return;
+        };
         let Some((line, column)) = self
             .links
-            .get(index)
+            .get(source)
             .and_then(|link| self.anchors.get(&link.target))
             .copied()
         else {
@@ -428,7 +463,7 @@ impl Pager {
         self.history.push_back(Visit {
             top: self.view.top,
             left: self.left,
-            source: index,
+            source,
         });
         if self.history.len() > MAX_LINK_HISTORY {
             self.history.pop_front();
@@ -534,6 +569,50 @@ impl Pager {
         }
     }
 
+    // Locate the selected label's first rendered word without coloring adjacent cells or prose
+    fn selection_match(&self, index: usize, line: &str) -> Option<Match> {
+        let source = *self.link_order.get(self.selected_link?)?;
+        let link = self.links.get(source)?;
+        if link.line != index {
+            return None;
+        }
+        let word = link
+            .label
+            .split_whitespace()
+            .find(|word| word.width() > 0)?;
+        let first = word.chars().next()?;
+        let plain = strip_sgr(line);
+        let (mut column, mut byte) = (0, 0);
+        // Whole-word widths preserve joined emoji and combining sequences before the source
+        for part in plain.split_inclusive(char::is_whitespace) {
+            let width = part.width();
+            if column + width > link.column {
+                for (offset, _) in part.char_indices().filter(|(_, ch)| *ch == first) {
+                    if column + part[..offset].width() != link.column {
+                        continue;
+                    }
+                    let matched = plain[byte + offset..]
+                        .chars()
+                        .zip(word.chars())
+                        .take_while(|(shown, expected)| shown == expected)
+                        .count();
+                    if matched > 0 {
+                        let start = plain[..byte + offset].chars().count();
+                        return Some(Match {
+                            line: index,
+                            start,
+                            end: start + matched,
+                        });
+                    }
+                }
+                return None;
+            }
+            column += width;
+            byte += part.len();
+        }
+        None
+    }
+
     // Paint one full frame: the visible lines with any matches, then the status bar on the last row
     fn draw(&self, frame: &mut String, columns: usize, clear: bool) {
         frame.clear();
@@ -550,10 +629,13 @@ impl Pager {
         for row in 0..self.view.rows {
             let index = self.view.top + row;
             if let Some(line) = self.document.line(index) {
-                let shown = match &self.search {
+                let mut shown = match &self.search {
                     Some(search) => highlight(line, &search.on_line(index)),
                     None => line.to_owned(),
                 };
+                if let Some(selected) = self.selection_match(index, line) {
+                    shown = highlight(&shown, &[(selected, true)]);
+                }
                 frame.push_str(&cut_left(&shown, self.left));
                 if shown.contains("\x1b]8;") {
                     frame.push_str(OSC8_CLOSE);
@@ -626,12 +708,24 @@ impl Pager {
         } else {
             "  Backspace back"
         };
-        if let Some(link) = self.selected_link.and_then(|index| self.links.get(index)) {
+        if let Some((index, link)) = self.selected_link.and_then(|index| {
+            self.link_order
+                .get(index)
+                .and_then(|&source| self.links.get(source))
+                .map(|link| (index, link))
+        }) {
             let label = format!("{}  Enter follow", link.label);
-            let right = format!("{place}{back} ");
+            let focus = format!("[{}/{}]", index + 1, self.link_order.len());
+            let right = format!("{focus}  {place}{back} ");
             if label.width() + right.width() + 2 > columns {
                 // The semantic label matters more than position/history on narrow screens.
-                let right = fit_left("Enter follow ", columns.saturating_sub(2));
+                let hint = format!("Enter follow {focus} ");
+                let hint = if hint.width() + 3 <= columns {
+                    hint
+                } else {
+                    format!("{focus} ")
+                };
+                let right = fit_left(&hint, columns.saturating_sub(2));
                 let left = fit_left(&link.label, columns.saturating_sub(right.width() + 2));
                 return bar(&left, &right, columns);
             }

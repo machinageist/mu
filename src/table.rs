@@ -189,6 +189,9 @@ fn draw_row(
             };
             if let Some(cell) = cell_lines.get(line_index) {
                 let offset = column_start + 1 + left;
+                if rendered.first_content_column.is_none() {
+                    rendered.first_content_column = cell.first_content_column.map(|at| offset + at);
+                }
                 rendered.anchors.extend(
                     cell.anchors
                         .iter()

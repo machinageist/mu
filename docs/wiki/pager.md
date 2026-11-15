@@ -73,12 +73,15 @@ It works for every document format. `mu --toc FILE` prints the same list without
 
 Internal EPUB links navigate inside the book with the keyboard, independently of external terminal hyperlinks:
 
-- `Tab` selects the next resolvable internal link and `Shift-Tab` the previous one, cycling through the document. The link is scrolled into view vertically and horizontally, and the status bar shows its label with `Enter follow`.
+- `Tab` selects the next resolvable internal link and `Shift-Tab` the previous one, cycling in rendered reading order (line, then display column). The link is scrolled into view vertically and horizontally, and the status bar shows its label with `Enter follow`.
+- Entering selection starts with the first visible source for `Tab`, or the last visible source for `Shift-Tab`, including the current horizontal window. If no source position is visible, selection continues in the requested reading direction and wraps around the book.
+- The selected source's first rendered word is emphasized and the status bar includes `[position/total]`, so identical footnote labels can be distinguished. Invisible zero-width-only prefixes are skipped when choosing the focus word. Focus styling does not alter the document text and works with document color disabled; very narrow windows retain the label and ordinal before the key hint.
 - `Enter` follows the selected link to its rendered destination line and display column, clamped at the last full page near the end. With no link selected, `Enter` still scrolls one line down.
 - `Backspace` returns to the view saved when following a link. In a search prompt it retains its query-editing behavior.
 - Relative chapter paths resolve within readable chapters in the EPUB spine. A fragment-only link stays in its own chapter, and identical IDs in different chapters cannot collide. A path without a fragment targets the chapter's start.
+- XHTML named/numeric references and equivalent Unicode/URI-encoded IDs resolve consistently without DTD fetching or recursive decoding. Empty page-break markers and table groups point to the next visible content in the chapter, never backward to preceding text or a border.
 - Missing or empty chapters, missing or hidden fragments, trailing anchors without a visible destination and ambiguous targets stay readable but cannot be selected or followed. They do not jump to an unrelated chapter.
-- Destinations use actual output lines and display columns, refreshed when the document reflows. Reflow clears the active selection; select again with `Tab` or `Shift-Tab`. Return positions are adjusted where the source link still matches.
+- Destinations use actual output lines and display columns, refreshed when the document reflows. Reflow clears the active selection; select again with `Tab` or `Shift-Tab`. Return positions are adjusted where the source link still matches, even when table wrapping changes the displayed order of links.
 - This works with `--links never`, `--color never` and `NO_COLOR`. No OSC 8 support is needed. For a short book, use `--paging always` to open the pager.
 
 These are in-pager keyboard jumps, not terminal-emulator mouse-click navigation. mu does not invent file URIs for ZIP members, invoke an external opener or make network requests to follow them. External HTTP(S)/mailto links instead follow [the OSC 8 policy](/wiki/usage#links), with activation left to the emulator.

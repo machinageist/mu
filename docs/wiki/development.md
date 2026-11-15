@@ -21,6 +21,16 @@ Every commit must pass this gate:
 cargo fmt --check && cargo test --release && cargo clippy --all-targets -- -D warnings
 ```
 
+Building a checkout does not replace the `mu` already on `PATH`. After verification, update a source installation explicitly:
+
+```sh
+cargo install --path . --force
+command -v mu
+mu --help
+```
+
+Between releases, the checkout and an older installed executable can report the same version. Use `target/release/mu` to test the checkout directly, or reinstall before testing new behavior through `mu` on `PATH`.
+
 ## Test suite {#tests}
 
 | File | Covers |
@@ -40,9 +50,11 @@ cargo fmt --check && cargo test --release && cargo clippy --all-targets -- -D wa
 | `tests/images.rs` | Image loading, fitting and fallbacks |
 | `tests/links.rs` | Public hyperlink rendering, label/fallback behavior and internal EPUB navigation metadata |
 | `tests/links_cli.rs` | Real CLI flag parsing, forced/disabled hyperlinks and color/environment independence |
+| `tests/links_anchor_lifecycle.rs` | Actual ZIP extraction and deferred identities through inline/raw content, table groups, images and chapter boundaries |
+| `tests/links_entities.rs` | XHTML named/numeric character references, equivalent Unicode/URI identities and single-pass decoding at actual ZIP boundaries |
 | `tests/url.rs` | URL fetching, run against a local server |
 | `src/pager/` unit tests | Key decoding, scroll clamping, search, the outline, internal navigation, OSC 8-aware sideways cutting, resize behaviour and the status bar |
-| `tests/pager_pty.rs` | The real pager in a pseudo-terminal: resizing, search, the outline, sideways scrolling, OSC 8 policy/cleanup and EPUB chapter jumps |
+| `tests/pager_pty.rs` | The real pager in a pseudo-terminal: resizing, search, the outline, sideways scrolling, OSC 8 policy/cleanup, EPUB chapter jumps and return history when table links reorder during reflow |
 
 The invariant sweeps check that no line exceeds the width, that color output with SGR stripped equals plain output at a fixed hyperlink policy, that every styled line resets before its newline, and that no control character from the input reaches the output. Hyperlink regressions cover label/fallback behavior, navigation metadata and OSC 8 state through paging. CLI subprocesses and PTYs prove emitted bytes and pager behavior, not whether a desktop emulator activates a mouse click. See [Safety & invariants](/wiki/safety#invariants).
 

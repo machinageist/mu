@@ -668,6 +668,303 @@ fn terminal_link_policy_is_observable_in_real_pager_sessions() {
 }
 
 #[test]
+fn entering_epub_link_selection_prefers_sources_in_the_visible_viewport() {
+    let container =
+        b"<container><rootfiles><rootfile full-path='book.opf'/></rootfiles></container>";
+    let package = b"<package><manifest><item id='one' href='one.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='one'/></spine></package>";
+    let padding = "<p>filler paragraph.</p>".repeat(30);
+    let chapter = format!(
+        "<html><body><h1>Visible page</h1><p><a href='#dest'>VISIBLE_FIRST</a> <a href='#dest'>VISIBLE_SECOND</a></p>{padding}<p><a href='#dest'>OFFSCREEN_LAST</a></p>{padding}<h1 id='dest'>DESTINATION</h1>{padding}</body></html>"
+    );
+    let fixture = Fixture::new(
+        "visible-links.epub",
+        &zip(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container),
+            ("book.opf", package),
+            ("one.xhtml", chapter.as_bytes()),
+        ]),
+    );
+    let mut pty = Pty::spawn_options(
+        fixture.path(),
+        9,
+        100,
+        &["--links=never", "--images=never", "--color=never"],
+        &[],
+    );
+    pty.wait_for("Tab links");
+    pty.send(b"\x1b[Z");
+    pty.wait_for("Enter follow");
+    assert!(
+        status(&pty.latest_frame()).contains("VISIBLE_SECOND"),
+        "reverse entry skipped visible sources"
+    );
+    pty.send(b"q");
+    assert_eq!(pty.exit_code(), Some(0));
+
+    let chapter = format!(
+        "<html><body><h1>Wide page</h1><table><tr><th>A</th><th>B</th><th>C</th><th>D</th></tr><tr><td><a href='#dest'>LEFT_LINK</a></td><td>{}</td><td>{}</td><td><a href='#dest'>RIGHT_LINK</a></td></tr></table>{padding}<h1 id='dest'>DESTINATION</h1>{padding}</body></html>",
+        "p".repeat(40),
+        "p".repeat(40)
+    );
+    let fixture = Fixture::new(
+        "horizontal-links.epub",
+        &zip(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container),
+            ("book.opf", package),
+            ("one.xhtml", chapter.as_bytes()),
+        ]),
+    );
+    let mut pty = Pty::spawn_options(
+        fixture.path(),
+        12,
+        40,
+        &[
+            "--links=never",
+            "--images=never",
+            "--color=never",
+            "--width=240",
+        ],
+        &[],
+    );
+    pty.wait_for("%");
+    pty.send(b"llll");
+    pty.wait_for("col ");
+    let viewport = |frame: &str| {
+        body(frame)
+            .lines()
+            .map(|line| line.chars().take(40).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let before = viewport(&pty.latest_frame());
+    assert!(before.contains("RIGHT_LINK") && !before.contains("LEFT_LINK"));
+    pty.send(b"\t");
+    pty.wait_for("Enter follow");
+    assert!(
+        status(&pty.latest_frame()).contains("RIGHT_LINK"),
+        "entry skipped the horizontally visible source"
+    );
+    assert_eq!(viewport(&pty.latest_frame()), before);
+    pty.send(b"q");
+    assert_eq!(pty.exit_code(), Some(0));
+}
+
+#[test]
+fn repeated_epub_link_labels_have_visible_focus_and_distinct_status() {
+    let container =
+        b"<container><rootfiles><rootfile full-path='book.opf'/></rootfiles></container>";
+    let package = b"<package><manifest><item id='one' href='one.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='one'/></spine></package>";
+    let padding = "<p>filler paragraph.</p>".repeat(30);
+    let chapter = format!(
+        "<html><body><h1>Sources</h1><p>全角 👨‍👩‍👧‍👦 First <a href='#alpha'>[1]</a> then second <a href='#beta'>[1]</a>.</p>{padding}<h1 id='alpha'>ALPHA_TARGET</h1>{padding}<h1 id='beta'>BETA_TARGET</h1>{padding}</body></html>"
+    );
+    let fixture = Fixture::new(
+        "repeated-labels.epub",
+        &zip(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container),
+            ("book.opf", package),
+            ("one.xhtml", chapter.as_bytes()),
+        ]),
+    );
+    for color in ["never", "always"] {
+        let mut pty = Pty::spawn_options(
+            fixture.path(),
+            12,
+            100,
+            &["--links=never", "--images=never", "--color", color],
+            &[],
+        );
+        pty.wait_for("Tab links");
+        let original = body(&pty.latest_frame());
+        pty.send(b"\t");
+        pty.wait_for("Enter follow");
+        let first = pty.latest_frame();
+        let first_focus = first
+            .find("\x1b[1;7m[1]")
+            .expect("selected source label must be visibly emphasized");
+        assert!(status(&first).contains("[1/2]"));
+        pty.send(b"\t");
+        pty.wait_for("Enter follow");
+        let second = pty.latest_frame();
+        let second_focus = second
+            .find("\x1b[1;7m[1]")
+            .expect("focus must move to the other repeated label");
+        assert!(second_focus > first_focus);
+        assert!(status(&second).contains("[2/2]"));
+        assert_ne!(
+            first, second,
+            "different links must not produce indistinguishable frames"
+        );
+        assert_eq!(body(&first), original);
+        assert_eq!(body(&second), original);
+        pty.send(b"\r");
+        pty.wait_for("Backspace back");
+        assert!(body(&pty.latest_frame()).starts_with("BETA_TARGET"));
+        pty.send(b"\x7f");
+        pty.wait_for("Tab links");
+        assert_eq!(body(&pty.latest_frame()), original);
+        pty.send(b"q");
+        assert_eq!(pty.exit_code(), Some(0));
+    }
+}
+
+#[test]
+fn epub_link_focus_skips_invisible_leading_words() {
+    let container =
+        b"<container><rootfiles><rootfile full-path='book.opf'/></rootfiles></container>";
+    let package = b"<package><manifest><item id='one' href='one.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='one'/></spine></package>";
+    for leading in ["&#x200b; ", "&#x200b;<br/>", "&#x200b; &#x200b; "] {
+        let chapter = format!(
+            "<html><body><p><a href='#d'>{leading}GO</a></p><p id='d'>DEST</p><p>TAIL</p></body></html>"
+        );
+        let fixture = Fixture::new(
+            "visible-word-focus.epub",
+            &zip(&[
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", container),
+                ("book.opf", package),
+                ("one.xhtml", chapter.as_bytes()),
+            ]),
+        );
+        for color in ["--color=never", "--color=always"] {
+            let mut pty = Pty::spawn_options(
+                fixture.path(),
+                7,
+                100,
+                &["--links=never", "--images=never", color],
+                &[],
+            );
+            pty.wait_for("Tab links");
+            let original = body(&pty.latest_frame());
+            pty.send(b"\t");
+            pty.wait_for("[1/1]");
+            let selected = pty.latest_frame();
+            assert!(
+                selected.contains("\x1b[1;7mGO"),
+                "focus must emphasize visible text, not an invisible prefix: {selected:?}"
+            );
+            assert_eq!(body(&selected), original);
+            pty.send(b"\r");
+            pty.wait_for("Backspace back");
+            pty.send(b"\x7f");
+            pty.wait_for("Tab links");
+            assert_eq!(body(&pty.latest_frame()), original);
+            pty.send(b"q");
+            assert_eq!(pty.exit_code(), Some(0));
+        }
+    }
+}
+
+#[test]
+fn duplicate_epub_labels_and_targets_do_not_rebind_return_history_after_reflow() {
+    let container =
+        b"<container><rootfiles><rootfile full-path='book.opf'/></rootfiles></container>";
+    let package = b"<package><manifest><item id='one' href='one.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='one'/></spine></package>";
+    let chapter = format!(
+        "<html><body><h1>Start</h1><table><tr><th>Left</th><th>Right</th></tr><tr><td>LEFT_BEGIN padding more words before LEFT_SOURCE <a href='#dest'>GO</a> END</td><td>RIGHT_SOURCE <a href='#dest'>GO</a></td></tr></table>{}<h2 id='dest'>DESTINATION</h2>{}</body></html>",
+        "<p>gap filler text.</p>".repeat(8),
+        "<p>tail filler text.</p>".repeat(4)
+    );
+    let fixture = Fixture::new(
+        "duplicate-return.epub",
+        &zip(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container),
+            ("book.opf", package),
+            ("one.xhtml", chapter.as_bytes()),
+        ]),
+    );
+    let mut pty = Pty::spawn_options(
+        fixture.path(),
+        3,
+        100,
+        &["--links=never", "--images=never", "--color=never"],
+        &[],
+    );
+    pty.wait_for("%");
+    pty.send(b"\t");
+    pty.wait_for("Enter follow");
+    assert!(body(&pty.latest_frame()).contains("LEFT_SOURCE"));
+    pty.send(b"\r");
+    pty.wait_for("Backspace back");
+    pty.resize(3, 40);
+    pty.wait_for("\x1b[2J");
+    pty.send(b"\x7f");
+    pty.wait_for("LEFT_SOURCE");
+    let returned = body(&pty.latest_frame());
+    let top = returned.lines().next().unwrap();
+    assert!(
+        top.contains("LEFT_SOURCE") && !top.contains("RIGHT_SOURCE"),
+        "return was rebound to another identical link: {returned:?}"
+    );
+    pty.send(b"q");
+    assert_eq!(pty.exit_code(), Some(0));
+}
+
+#[test]
+fn epub_return_history_tracks_sources_when_reflow_reorders_table_links() {
+    let container =
+        b"<container><rootfiles><rootfile full-path='book.opf'/></rootfiles></container>";
+    let package = b"<package><manifest><item id='one' href='one.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='one'/></spine></package>";
+    let chapter = format!(
+        "<html><body><h1>Sources</h1><table><tr><th>one</th><th>two</th><th>three</th><th>four</th></tr><tr><td><a href='#dest'>FirstOne</a> <a href='#dest'>SecondOne</a></td><td><a href='#other'>ThirdOne</a> {}</td><td>{}</td><td>{}</td></tr></table>{}<h1 id='dest'>DESTINATION</h1>{}<h1 id='other'>OTHER</h1>{}</body></html>",
+        "x".repeat(80),
+        "y".repeat(30),
+        "z".repeat(30),
+        "<p>filler paragraph.</p>".repeat(30),
+        "<p>tail</p>".repeat(20),
+        "<p>tail</p>".repeat(20),
+    );
+    let fixture = Fixture::new(
+        "reordered-links.epub",
+        &zip(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container),
+            ("book.opf", package),
+            ("one.xhtml", chapter.as_bytes()),
+        ]),
+    );
+    for (before, after, tabs) in [(120, 60, 2), (60, 120, 3)] {
+        let mut pty = Pty::spawn_options(
+            fixture.path(),
+            12,
+            before,
+            &["--links=never", "--color=never", "--images=never"],
+            &[],
+        );
+        pty.wait_for("Tab links");
+        pty.send(&vec![b'\t'; tabs]);
+        pty.wait_for("SecondOne  Enter follow");
+        pty.send(b"\r");
+        pty.wait_for("Backspace back");
+        assert!(body(&pty.latest_frame()).starts_with("DESTINATION"));
+        pty.resize(12, after);
+        pty.wait_for("\x1b[2J");
+        assert!(
+            status(&pty.latest_frame()).contains("Backspace back"),
+            "reflow discarded the unchanged source link's return position"
+        );
+        pty.send(b"\x7f");
+        pty.wait_for("SecondOne");
+        assert!(!body(&pty.latest_frame()).contains("DESTINATION"));
+        let labels = if after == 60 {
+            ["FirstOne", "ThirdOne", "SecondOne"]
+        } else {
+            ["FirstOne", "SecondOne", "ThirdOne"]
+        };
+        for label in labels {
+            pty.send(b"\t");
+            pty.wait_for(&format!("{label}  Enter follow"));
+        }
+        pty.send(b"q");
+        assert_eq!(pty.exit_code(), Some(0));
+    }
+}
+
+#[test]
 fn epub_return_history_is_bounded_in_a_live_session() {
     let fixture = navigation_book();
     let mut pty = Pty::spawn_options(

@@ -151,12 +151,15 @@ fn raw_anchor_rows(raw: &Raw, limit: usize) -> Vec<(String, usize, usize)> {
             row += 1;
             column = 0;
         }
-        while let Some((at, id)) = raw.anchors.get(index) {
-            if *at > offset {
-                break;
+        // A newline, indentation, or EOF cannot give an unpainted ID a destination.
+        if ch.is_some_and(|ch| !ch.is_whitespace()) && width > 0 {
+            while let Some((at, id)) = raw.anchors.get(index) {
+                if *at > offset {
+                    break;
+                }
+                mapped.push((id.clone(), row, column));
+                index += 1;
             }
-            mapped.push((id.clone(), row, column));
-            index += 1;
         }
         if ch == Some('\n') {
             row += 1;
@@ -495,10 +498,6 @@ impl<'o> Renderer<'o> {
     // Flush whatever is still buffered and hand back the output
     fn finish(mut self) -> Rendered {
         self.flush_inline();
-        let last = self.current_line().saturating_sub(1);
-        for id in std::mem::take(&mut self.pending_anchors) {
-            self.record_anchor(id, last, 0);
-        }
         self.navigation_links
             .retain(|link| link.line != usize::MAX && self.anchor_ids.contains(&link.target));
         Rendered {
@@ -721,15 +720,18 @@ impl<'o> Renderer<'o> {
             .max(MIN_CONTENT_WIDTH)
     }
 
-    // Write the container gutters that open a content line
-    fn line_prefix(&mut self) {
+    // Bind only at actual content, never as a side effect of painting a gutter or border.
+    fn bind_pending_anchors(&mut self, column: usize) {
         if !self.pending_anchors.is_empty() {
             let line = self.current_line();
-            let column = self.gutter_width();
             for id in std::mem::take(&mut self.pending_anchors) {
                 self.record_anchor(id, line, column);
             }
         }
+    }
+
+    // Write the container gutters that open a content line
+    fn line_prefix(&mut self) {
         for container in &mut self.containers {
             if container.first_used {
                 self.out.push_str(&container.rest);
@@ -760,6 +762,9 @@ impl<'o> Renderer<'o> {
         let gutter = self.gutter_width();
         for line in lines {
             let index = self.current_line();
+            if let Some(column) = line.first_content_column {
+                self.bind_pending_anchors(gutter + column);
+            }
             for (id, column) in &line.anchors {
                 self.record_anchor(id.clone(), index, gutter + column);
             }
@@ -824,16 +829,16 @@ impl<'o> Renderer<'o> {
                 self.options.color,
             );
             self.emit_lines(&lines);
-        } else {
-            self.defer_inline_anchors();
         }
+        self.pending_anchors
+            .extend(self.inline.trailing_anchors(0).map(str::to_owned));
         self.inline.clear();
         self.images.clear();
     }
 
     // Preserve empty inline anchors until the next visible output line
-    fn defer_inline_anchors(&mut self) {
-        for atom in &self.inline.atoms {
+    fn defer_inline_anchors(&mut self, end: usize) {
+        for atom in &self.inline.atoms[..end] {
             if let Atom::Anchor { start, end } = *atom {
                 self.pending_anchors
                     .push(self.inline.arena[start..end].to_owned());
@@ -891,6 +896,7 @@ impl<'o> Renderer<'o> {
             first_used: false,
         });
         if let Some((label, style)) = alert {
+            self.bind_pending_anchors(self.gutter_width());
             self.line_prefix();
             paint(&mut self.out, label, style, color);
             self.out.push('\n');
@@ -989,6 +995,7 @@ impl<'o> Renderer<'o> {
     fn rule(&mut self) {
         self.begin_block();
         let width = self.avail();
+        self.bind_pending_anchors(self.gutter_width());
         self.line_prefix();
         paint_repeat(
             &mut self.out,
@@ -1026,6 +1033,8 @@ impl<'o> Renderer<'o> {
             paint_repeat(&mut self.out, glyph, widest, style, self.options.color);
             self.out.push('\n');
         }
+        self.pending_anchors
+            .extend(self.inline.trailing_anchors(0).map(str::to_owned));
         self.inline.clear();
         self.images.clear();
         self.inline_open = false;
@@ -1034,9 +1043,15 @@ impl<'o> Renderer<'o> {
 
     // Write a code block or front matter inside a labelled frame
     fn end_framed(&mut self) {
-        let Some(raw) = self.raw.take() else {
+        let Some(mut raw) = self.raw.take() else {
             return;
         };
+        raw.anchors.splice(
+            0..0,
+            std::mem::take(&mut self.pending_anchors)
+                .into_iter()
+                .map(|id| (0, id)),
+        );
         let (label, body) = match &raw.kind {
             RawKind::Code(lang) => (lang.as_str(), Style::PLAIN),
             RawKind::FrontMatter => (FRONT_MATTER_LABEL, STYLE_FRONT_MATTER),
@@ -1046,7 +1061,6 @@ impl<'o> Renderer<'o> {
         let width = self.avail();
 
         // Top edge with the language label
-        let anchors = std::mem::take(&mut self.pending_anchors);
         self.line_prefix();
         paint(&mut self.out, FRAME_TOP, STYLE_FRAME, color);
         let mut used = FRAME_EDGE_WIDTH;
@@ -1067,8 +1081,7 @@ impl<'o> Renderer<'o> {
         );
         self.out.push('\n');
 
-        // Source anchors point to code text rather than the decorative top border
-        self.pending_anchors.extend(anchors);
+        // Source anchors are mapped to code glyphs rather than decorative borders.
         let body_start = self.current_line();
 
         // Highlighted body, when color is on and the language is known
@@ -1096,8 +1109,9 @@ impl<'o> Renderer<'o> {
                     self.out.push('\n');
                 }
             }
-            self.record_raw_anchors(&raw, body_start, width);
+            let trailing = self.record_raw_anchors(&raw, body_start, width);
             self.frame_bottom(width);
+            self.pending_anchors.extend(trailing);
             return;
         }
 
@@ -1122,21 +1136,26 @@ impl<'o> Renderer<'o> {
             }
         }
 
-        self.record_raw_anchors(&raw, body_start, width);
+        let trailing = self.record_raw_anchors(&raw, body_start, width);
         self.frame_bottom(width);
+        self.pending_anchors.extend(trailing);
     }
 
-    // Bind raw-content anchors after the actual body height is known
-    fn record_raw_anchors(&mut self, raw: &Raw, start: usize, width: usize) {
+    // Bind raw-content anchors to following glyphs and return IDs with no body destination.
+    fn record_raw_anchors(&mut self, raw: &Raw, start: usize, width: usize) -> Vec<String> {
         if raw.anchors.is_empty() {
-            return;
+            return Vec::new();
         }
-        let last = self.current_line().saturating_sub(start).saturating_sub(1);
         let gutter = self.gutter_width() + FRAME_EDGE_WIDTH;
-        for (id, row, column) in raw_anchor_rows(raw, width.saturating_sub(FRAME_EDGE_WIDTH).max(1))
-        {
-            self.record_anchor(id, start + row.min(last), gutter + column);
+        let mapped = raw_anchor_rows(raw, width.saturating_sub(FRAME_EDGE_WIDTH).max(1));
+        let consumed = mapped.len();
+        for (id, row, column) in mapped {
+            self.record_anchor(id, start + row, gutter + column);
         }
+        raw.anchors[consumed..]
+            .iter()
+            .map(|(_, id)| id.clone())
+            .collect()
     }
 
     // Close a code frame with its bottom edge
@@ -1171,6 +1190,9 @@ impl<'o> Renderer<'o> {
         for line in raw.text.trim_end().lines() {
             verbatim_chunks(line, width, &mut chunks);
             for chunk in chunks.drain(..) {
+                if !chunk.trim().is_empty() && text_width(&chunk) > 0 {
+                    self.bind_pending_anchors(self.gutter_width());
+                }
                 self.line_prefix();
                 paint(&mut self.out, &chunk, STYLE_HTML, self.options.color);
                 self.out.push('\n');
@@ -1203,6 +1225,11 @@ impl<'o> Renderer<'o> {
         let Some(table) = &mut self.table else {
             return;
         };
+        self.pending_anchors.extend(
+            self.inline
+                .trailing_anchors(table.cell_start)
+                .map(str::to_owned),
+        );
         let atoms = table.cell_start..self.inline.atoms.len();
         table.cells.push(Cell {
             atoms,
@@ -1222,7 +1249,11 @@ impl<'o> Renderer<'o> {
             self.table_min_column,
             self.options.color,
         );
+        // IDs left after the final cell have not found content in this table.
+        // Emitting its earlier rows and borders must not consume them backwards.
+        let trailing = std::mem::take(&mut self.pending_anchors);
         self.emit_lines(&lines);
+        self.pending_anchors.extend(trailing);
         self.inline.clear();
         self.images.clear();
         self.pending_blank = true;
@@ -1433,8 +1464,10 @@ impl<'o> Renderer<'o> {
             return false;
         }
         let alt = image.alt.trim().to_owned();
-        self.defer_inline_anchors();
+        let image_end = image.end;
+        self.defer_inline_anchors(image_end);
         for line in lines {
+            self.bind_pending_anchors(self.gutter_width());
             self.line_prefix();
             self.out.push_str(&line);
             self.out.push('\n');
@@ -1451,6 +1484,12 @@ impl<'o> Renderer<'o> {
                 self.options.color,
             );
             self.emit_lines(&lines);
+        }
+        for atom in &self.inline.atoms[image_end..] {
+            if let Atom::Anchor { start, end } = *atom {
+                self.pending_anchors
+                    .push(self.inline.arena[start..end].to_owned());
+            }
         }
         true
     }

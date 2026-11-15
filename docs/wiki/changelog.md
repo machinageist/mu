@@ -19,6 +19,10 @@ Changes since 0.8.1, not yet in a release.
 
 ### Fixed {#unreleased-fixed}
 
+- EPUB fragment IDs with XHTML named character references resolve to equivalent literal or percent-encoded identifiers, preserving identity whitespace and single-pass decoding without fetching DTDs
+- Trailing EPUB page-break and table-group anchors bind to following visible content, not preceding text, Unicode whitespace, padding or table borders; anchors with no following content expire at the chapter boundary
+- EPUB selection visibly marks the source label and shows a link ordinal so repeated labels remain distinguishable. Initial Tab/Shift-Tab selection prioritizes source positions already visible, including horizontally scrolled tables
+- EPUB Backspace history survives window resizing when wrapped table cells change the displayed order of source links. Tab and Shift-Tab still follow the current rendered reading order
 - EPUB extraction keeps XML literals, instructions and image alt text from creating markup actions. Hidden IDs, empty chapters and trailing anchors cannot point at unrelated content; ambiguous repaired internal destinations remain inactive
 
 ## 0.8.1 · 2026-11-12 {#v0-8-1}
