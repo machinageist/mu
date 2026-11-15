@@ -2,22 +2,28 @@
 title: Changelog
 group: Project
 order: 2
-summary: Every release from 0.1.0 to 0.8.1, and what's unreleased
+summary: Every release from 0.1.0 to 0.9.0, and what's unreleased
 ---
 
 Every notable change, following [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Mirrors `CHANGELOG.md`.
 
 ## Unreleased {#unreleased}
 
-Changes since 0.8.1, not yet in a release.
+Changes since 0.9.0, not yet in a release.
 
 ### Added {#unreleased-added}
+
+### Fixed {#unreleased-fixed}
+
+## 0.9.0 · 2026-11-15 {#v0-9-0}
+
+### Added {#v0-9-0-added}
 
 - OSC 8 hyperlinks for semantic document links, controlled by `--links auto|always|never` (default `auto`). Recognized styled terminals show clickable labels without a redundant URL suffix; other environments retain printed URLs. `always` works independently of `--color never` and `NO_COLOR`. Only validated absolute HTTP(S)/mailto targets qualify, with ASCII URI payloads bounded to 8192 encoded bytes; source, code and data URLs are not auto-linkified
 - EPUB chapter navigation in the pager: `Tab` / `Shift-Tab` select internal links, `Enter` follows and `Backspace` returns, including with `--links never` or color off. Relative chapter paths and chapter-scoped fragments resolve to rendered lines through reflow; unresolved targets remain readable but cannot jump. No external opener, network request or invented ZIP-member file URI is used
 - Library: explicit `Options.links: bool` defaults to `false`; `present_outlined` returns `Rendered { text, headings, anchors, links }` with `Anchor { id, line, column }` and `NavigationLink { target, label, line, column }` metadata for internal EPUB navigation
 
-### Fixed {#unreleased-fixed}
+### Fixed {#v0-9-0-fixed}
 
 - EPUB fragment IDs with XHTML named character references resolve to equivalent literal or percent-encoded identifiers, preserving identity whitespace and single-pass decoding without fetching DTDs
 - Trailing EPUB page-break and table-group anchors bind to following visible content, not preceding text, Unicode whitespace, padding or table borders; anchors with no following content expire at the chapter boundary
