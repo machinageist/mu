@@ -92,6 +92,8 @@ PDF goes through `pdftotext -layout -enc UTF-8 - -`, with no shell:
 - `render` and `present` return text. `present_outlined(input, format, &options)` returns `Rendered { text, headings, anchors, links }`.
 - `Anchor { id: String, line: usize, column: usize }` identifies an internal destination, and `NavigationLink { target: String, label: String, line: usize, column: usize }` identifies its source label. Positions use zero-based rendered output lines and display columns, not source lines or byte offsets. Metadata is recomputed at each render width and kept separate from terminal escape bytes; external OSC 8 destinations are not navigation entries.
 - For an EPUB, call `extract(bytes, Format::Epub)` and pass the returned HTML to `present_outlined` with `Format::Epub` to retain chapter navigation metadata. Data and source formats have no internal navigation metadata.
+- `present_interactive` is additive: `InteractiveRendered { document, link_regions, images }` leaves existing field shapes intact. Half-open `NavigationSpan` ranges identify all painted cells of each canonical internal link, excluding container chrome and padding. Optional image sidecars carry validated RGBA and block geometry separately from unchanged legacy text; callers explicitly request Kitty assets through image options. The library performs no capability handshake.
+- `display::units` and `display::width` define the shared extended-grapheme, non-CJK display policy: indivisible combining/emoji sequences, one-column ambiguous units and retained zero-width units. Layout, navigation, clipping and hit testing share this model.
 
 ## Invariants, all formats
 
@@ -121,14 +123,19 @@ PDF goes through `pdftotext -layout -enc UTF-8 - -`, with no shell:
   - `Enter` follows the selected internal link; without a selection it still scrolls one line. `Backspace` returns through internal-jump history; in the search prompt it retains its editing behavior
   - Reflow keeps return history tied to source links, not their current displayed order. Wrapping table cells may reorder visible link positions without losing or rebinding the saved source visit
   - Targets are chapter-scoped anchors mapped to rendered lines, recomputed on resize/reflow. Only resolvable targets enter selection; missing or hidden targets cannot jump to an unrelated chapter
-  - Works independently of OSC 8 and SGR color, including `--links never` and `--color never`. Terminal-emulator mouse gestures apply to external OSC 8 links, not these in-pager jumps. No external opener or network access is used
+  - A plain left press on a fully visible painted label cell follows the same canonical source and preserves the exact departure view for Backspace. Wrapped/styled labels and tables share layout metadata; gutters, padding, borders, the footer and partial wide glyphs do not activate. Release/motion/modified reports do not follow links. Mouse mode is scoped to resolvable internal-link books and restored on every exit path
+  - Works independently of OSC 8 and SGR color, including `--links never` and `--color never`. External OSC 8 activation remains terminal-managed. No external opener or network access is used
 
+
+## Images
 
 - An image alone in its paragraph or block is drawn. Inline images, images inside active external/internal links, failures, color off and `--images never` all show `[image: alt]`; linked alt text retains its destination
 - The aspect ratio is exact to within half a cell, using the terminal's reported cell pixels or an assumed 1:2 cell. Images are never enlarged, never wider than the content column and never taller than the screen minus 2 rows
 - No image network access unless `--images fetch`, which a URL input implies unless `--images` is given. Remote loads go through the system `curl`, limited to http(s), including on redirect
 - Decode limits: 20 MB per source, 64 megapixels, 16384 px per side
-- The pager always uses half blocks. Native protocols are used only when writing straight to a supporting terminal outside tmux
+- Direct styled Kitty/Ghostty pagers use acknowledged raw-RGBA uploads and virtual Unicode placements. Explicit row/column marks clip all viewport edges, exclude the footer, hide under the outline and reuse uploads across redraws. Full terminal geometry refits images on resize, including height and cell pixels
+- Pixel assets and graphics payloads remain separate from searchable document text. Unknown/multiplexed terminals, missing/negative acknowledgements and resource limits retain half blocks. iTerm2 remains straight-output only; color off and images never remain alt-text only
+- Interactive capture and the native cache each cap RGBA at 32 MiB; at most eight native images are live. Source decode limits remain independent. Fresh owned IDs are registered before emission, pending deletes remain registered until a successful write, and cleanup deletes only owned IDs on eviction, reflow, quit, error and panic
 
 ## URLs
 

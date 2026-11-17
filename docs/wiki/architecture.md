@@ -5,7 +5,7 @@ order: 1
 summary: Pipeline, source layout and library API
 ---
 
-About 14,400 lines of Rust in one crate: a thin CLI around a library that turns text into styled terminal lines.
+One Rust crate: a thin CLI around a library that turns text into styled terminal lines.
 
 ## Pipeline {#pipeline}
 
@@ -51,7 +51,7 @@ For the detailed flow of each stage, see the [logic maps](/wiki/logic-maps).
 src/
   main.rs     CLI: args, input, width/color/links/paging decisions, --toc, single write
   fetch.rs    URL input: curl arguments, raw-file rewrites, response parsing
-  pager/      built-in pager: raw mode, keys, scrolling, search, outline, chapter jumps, sideways, resize, status bar
+  pager/      raw mode, mouse/keys, search, outline, chapter jumps, clipped native images and owned cleanup
   term.rs     terminal size via TIOCGWINSZ
   lib.rs      public API: render, present, present_outlined, outline, detect, sniff, sniff_bytes, extract, Format, Options
   outline.rs  heading list shared by --toc and the pager
@@ -61,6 +61,7 @@ src/
   image/      sources, codecs, svg, fit and encoders (half block, Kitty, iTerm2)
   render.rs   event walker: blocks, containers, lists, code frames, headings
   inline.rs   styled word atoms, control-char scrubbing, word wrap
+  display.rs  shared extended-grapheme units and non-CJK display widths
   hyperlink.rs  external OSC 8 target validation and bounded ASCII URI encoding
   table.rs    column fitting and box drawing
   style.rs    SGR styles and the color theme
@@ -68,10 +69,10 @@ src/
 
 | File | Lines | File | Lines |
 |---|---|---|---|
-| `format/asciidoc.rs` | 1398 | `data/xml.rs` | 625 |
-| `pager/mod.rs` | 1189 | `main.rs` | 567 |
-| `render.rs` | 1069 | `image/codec.rs` | 545 |
-| `format/html.rs` | 1055 | `image/encode.rs` | 532 |
+| `format/asciidoc.rs` | 1411 | `data/xml.rs` | 634 |
+| `pager/mod.rs` | 1861 | `main.rs` | 720 |
+| `render.rs` | 1642 | `image/codec.rs` | 545 |
+| `format/html.rs` | 1478 | `image/encode.rs` | 532 |
 | `format/rst.rs` | 1037 | `data/yaml.rs` | 514 |
 | `format/org.rs` | 892 | `fetch.rs` | 471 |
 
@@ -81,6 +82,7 @@ src/
 |---|---|
 | `pulldown-cmark` 0.13 | Markdown parsing. Default features off, `simd` on: CommonMark plus GFM tables, strikethrough, task lists, footnotes, alerts |
 | `unicode-width` | Display width of CJK and emoji |
+| `unicode-segmentation` | Indivisible extended grapheme clusters shared by layout, clipping and hit testing |
 | `libc` | The `TIOCGWINSZ` ioctl, `termios`, `select` and the resize self-pipe |
 | `png`, `zune-jpeg`, `gif`, `image-webp` | Raster image decoding |
 | `resvg` | SVG rendering, with default features off: no text, no system fonts |
@@ -88,7 +90,7 @@ src/
 
 Everything else is hand-written: the HTML, RST, Org and AsciiDoc parsers, the CSV and TSV reader, the JSON, YAML, TOML and XML tokenizers, image fitting and resampling, the half-block, Kitty and iTerm2 encoders, base64, the zip reader, and the pager with its search. There's no HTTP or TLS code; URLs go through the system `curl`. PDF text comes from poppler's `pdftotext` when it's installed.
 
-The release profile uses `opt-level = 3`, fat LTO, one codegen unit and `strip`, giving a ~2.6 MB binary. It keeps `panic = "unwind"` on purpose, so a panic inside a third-party image decoder can be caught and shown as alt text.
+The release profile uses `opt-level = 3`, fat LTO, one codegen unit and `strip`. It keeps `panic = "unwind"` on purpose, so a panic inside a third-party image decoder can be caught and shown as alt text.
 
 ## Library API {#library-api}
 
@@ -96,10 +98,13 @@ The binary is a thin CLI around the `mu` library crate, which exports:
 
 ```rust
 pub use book::{extract, sniff_bytes};
-pub use format::{Format, detect, present, present_outlined, sniff};
+pub use format::{Format, detect, present, present_interactive, present_outlined, sniff};
 pub use image::{CellSize, ImageMode, ImageOptions, Protocol};
 pub use outline::{outline, outline_entries};
-pub use render::{Anchor, Heading, NavigationLink, Options, Rendered, render};
+pub use render::{
+    Anchor, Heading, InteractiveRendered, LinkRegion, NavigationLink, NavigationSpan,
+    Options, RasterImage, Rendered, RenderedImage, render,
+};
 ```
 
 | Item | Purpose |
@@ -110,6 +115,10 @@ pub use render::{Anchor, Heading, NavigationLink, Options, Rendered, render};
 | `Rendered { text, headings, anchors, links }` | Rendered text plus `Heading { level, text, line }`, `Anchor` and `NavigationLink` lists; data/source formats have no headings or navigation metadata |
 | `Anchor { id, line, column }` | Internal destination identity and zero-based rendered output line/display column |
 | `NavigationLink { target, label, line, column }` | Internal link's target anchor ID, semantic label and zero-based first rendered output line/display column; not an external OSC 8 destination |
+| `present_interactive(input, Format, &Options) -> InteractiveRendered` | Additive wrapper preserving legacy document text and attaching complete-label hit regions and optional pixel assets |
+| `InteractiveRendered { document, link_regions, images }` | Existing `Rendered` plus canonical link spans and validated native-image sidecars, never graphics payloads inside searchable text |
+| `NavigationSpan { line, start, end }`, `LinkRegion { link, spans }` | Zero-based half-open display-cell ranges tied to the canonical `document.links` index, excluding borders, gutters and padding |
+| `display::units`, `display::width` | Shared extended-grapheme display policy, with one-column ambiguous characters and indivisible combining/emoji sequences |
 | `outline(&[Heading], &Options) -> String` | The `--toc` text: headings indented by level, colored when `color` is on |
 | `outline_entries(&[Heading], width) -> Vec<String>` | The same list as plain lines cut to a width |
 | `detect(path: Option<&str>, input) -> Format` | Extension, then sniff, then Markdown |

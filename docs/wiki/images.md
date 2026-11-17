@@ -35,11 +35,13 @@ scale = min(1, max_width_px / image_width, max_height_px / image_height)
 
 | Where | Protocol |
 |---|---|
-| kitty, Ghostty (printing straight to the terminal) | Kitty graphics protocol, raw RGBA |
+| Direct kitty, Ghostty (pager or straight output) | Kitty graphics protocol, raw RGBA; the pager acknowledges and reuses clipped virtual placements |
 | iTerm2, WezTerm (printing straight to the terminal) | iTerm2 inline images, PNG-encoded |
-| The pager, tmux, pipes, every other terminal | 24-bit-color `▀` half blocks: top pixel as foreground, bottom as background |
+| Other pagers/terminals, tmux, screen and pipes | 24-bit-color `▀` half blocks: top pixel as foreground, bottom as background |
 
-The pager always uses half blocks. Native protocols are only used when writing straight to a supporting terminal outside tmux.
+The pager keeps a pixel-resolution image sidecar instead of shrinking covers to one pixel per text column. On a direct Kitty/Ghostty terminal, an image is uploaded once, acknowledged, then painted through virtual text placements clipped to the visible body. Scrolling and redraws reuse the same upload; outlines hide images and resizing refits them without touching the footer. Only the pager's own image IDs are deleted on eviction, reflow and exit. No delete-all command is used.
+
+Half-block text remains available throughout. Unknown or multiplexed terminals, a rejected upload/placement, a missing acknowledgement or a resource limit keep that fallback rather than leaving holes in the page. iTerm2 inline images remain available for straight output, not the pager. `--images never` and color-off behavior are unchanged.
 
 ## Image formats {#image-formats}
 
@@ -68,6 +70,7 @@ With `--images never`, with color off, or for any image that fails to load or de
 ## Limits {#image-limits}
 
 - Sources over 20 MB, images over 64 megapixels, and images over 16384 pixels on a side are refused before decoding.
+- Interactive pixel sidecars and the pager's native cache each have a 32 MiB RGBA budget; the cache has at most eight live images. Source decode limits still apply independently. Oversized or excess images keep their half-block fallback.
 - No EXIF orientation for JPEGs, no animated GIFs, no SVG text, and no images inline within a line of text.
 
 The full flow is [logic map 7](/wiki/logic-maps#map-7).

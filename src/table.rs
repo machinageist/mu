@@ -88,7 +88,7 @@ pub fn render(
     let mut widths = vec![0; columns];
     for row in &table.rows {
         for (column, cell) in row.cells.iter().enumerate() {
-            let natural = measure(&inline.atoms[cell.atoms.clone()]);
+            let natural = measure(&inline.atoms[cell.atoms.clone()], &inline.arena);
             widths[column] = widths[column].max(natural);
         }
     }
@@ -197,9 +197,16 @@ fn draw_row(
                         .iter()
                         .map(|(id, at)| (id.clone(), offset + at)),
                 );
-                rendered
-                    .links
-                    .extend(cell.links.iter().map(|(id, at)| (*id, offset + at)));
+                rendered.navigation_starts.extend(
+                    cell.navigation_starts
+                        .iter()
+                        .map(|&(id, at)| (id, offset + at)),
+                );
+                rendered.links.extend(
+                    cell.links
+                        .iter()
+                        .map(|(id, start, end)| (*id, offset + start, offset + end)),
+                );
             }
             line.push(' ');
             push_spaces(line, left);
@@ -218,5 +225,60 @@ fn draw_row(
 fn push_spaces(out: &mut String, count: usize) {
     for _ in 0..count {
         out.push(' ');
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_span_endpoints_follow_cell_alignment_without_owning_padding() {
+        let mut inline = Inline::default();
+        inline.begin(Style::PLAIN);
+        inline.navigate(Some(0));
+        inline.word("中e\u{301}");
+        inline.navigate(None);
+        let end = inline.atoms.len();
+        inline.begin(Style::PLAIN);
+        inline.word("1234567");
+        let table = |alignment| Table {
+            aligns: vec![alignment],
+            rows: vec![
+                Row {
+                    head: false,
+                    cells: vec![Cell {
+                        atoms: 0..end,
+                        base: Style::PLAIN,
+                    }],
+                },
+                Row {
+                    head: false,
+                    cells: vec![Cell {
+                        atoms: end..inline.atoms.len(),
+                        base: Style::PLAIN,
+                    }],
+                },
+            ],
+            cells: vec![],
+            cell_start: 0,
+            in_head: false,
+        };
+        for (alignment, start, stop) in [
+            (Alignment::Left, 2, 5),
+            (Alignment::Center, 4, 7),
+            (Alignment::Right, 6, 9),
+        ] {
+            for color in [false, true] {
+                let lines = render(&table(alignment), &inline, 40, MIN_COLUMN_WIDTH, color);
+                assert_eq!(lines[1].links, [(0, start, stop)]);
+                assert_eq!(lines[1].width, 11);
+                assert!(
+                    lines[0].links.is_empty()
+                        && lines[2].links.is_empty()
+                        && lines[3].links.is_empty()
+                );
+            }
+        }
     }
 }

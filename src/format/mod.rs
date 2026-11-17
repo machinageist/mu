@@ -422,6 +422,51 @@ pub fn present_outlined(input: &str, format: Format, options: &Options) -> Rende
     }
 }
 
+/// Render with additive interactive metadata and usable legacy text fallback.
+///
+/// EPUB link regions index the final, resolved `Rendered::links` in source order.
+/// Native controls never enter document text: graphic protocols use the same
+/// half-block/alt fallback as legacy `present_outlined` with `Protocol::HalfBlock`.
+/// `Protocol::Kitty` additionally captures fitted full-cell-pixel, straight RGBA
+/// sidecars, capped at 32 MiB per layout. Omitted assets retain their fallback.
+/// Other protocols return no assets. Existing color, image-mode and source
+/// validation rules still apply; this does not grant additional file/network access.
+pub fn present_interactive(
+    input: &str,
+    format: Format,
+    options: &Options,
+) -> crate::InteractiveRendered {
+    use crate::render::{
+        render_interactive_events, render_interactive_markdown, render_interactive_markup,
+    };
+    match format {
+        Format::Epub => {
+            render_interactive_events(html::annotated_events(input), options, input.len(), true)
+        }
+        Format::Markdown => render_interactive_markdown(input, options),
+        Format::Html => render_interactive_markup(html::events(input), options, input.len()),
+        Format::Rst => render_interactive_markup(rst::events(input), options, input.len()),
+        Format::Org => render_interactive_markup(org::events(input), options, input.len()),
+        Format::AsciiDoc => {
+            render_interactive_markup(asciidoc::events(input), options, input.len())
+        }
+        Format::Man if !data::overstrike::is_formatted(input) => {
+            render_interactive_markup(man::events(input), options, input.len())
+        }
+        Format::Jupyter => match jupyter::markdown(input) {
+            Some(markdown) => render_interactive_markdown(&markdown, options),
+            None => crate::InteractiveRendered {
+                document: present_outlined(input, format, options),
+                ..Default::default()
+            },
+        },
+        _ => crate::InteractiveRendered {
+            document: present_outlined(input, format, options),
+            ..crate::InteractiveRendered::default()
+        },
+    }
+}
+
 // Source lines, highlighted when color is on and the language is known
 fn code_lines(input: &str, options: &Options) -> Vec<data::StyledLine> {
     if !options.color {

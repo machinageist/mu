@@ -5,6 +5,7 @@
 
 mod book;
 mod data;
+pub mod display;
 mod format;
 mod highlight;
 mod hyperlink;
@@ -16,7 +17,10 @@ mod style;
 mod table;
 
 pub use book::{extract, sniff_bytes};
-pub use format::{Format, detect, present, present_outlined, sniff};
+pub use format::{Format, detect, present, present_interactive, present_outlined, sniff};
 pub use image::{CellSize, ImageMode, ImageOptions, Protocol};
 pub use outline::{outline, outline_entries};
-pub use render::{Anchor, Heading, NavigationLink, Options, Rendered, render};
+pub use render::{
+    Anchor, Heading, InteractiveRendered, LinkRegion, NavigationLink, NavigationSpan, Options,
+    RasterImage, Rendered, RenderedImage, render,
+};

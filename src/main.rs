@@ -13,8 +13,8 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
 use mu::{
-    CellSize, Format, ImageMode, ImageOptions, Options, Protocol, Rendered, extract, outline,
-    present_outlined, sniff, sniff_bytes,
+    CellSize, Format, ImageMode, ImageOptions, InteractiveRendered, Options, Protocol, Rendered,
+    extract, outline, present_interactive, present_outlined, sniff, sniff_bytes,
 };
 
 const USAGE: &str = "\
@@ -65,6 +65,7 @@ Pager keys:
   Tab  Shift-Tab        select next, previous EPUB chapter link
   Enter                 follow a selected EPUB link (otherwise scroll a line)
   Backspace             return from an EPUB link jump
+  Left-click            follow an internal EPUB link; mouse wheel scrolls
   q  Ctrl-C             quit";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -285,27 +286,62 @@ fn present_all(source: &Source, options: &Options) -> Rendered {
         if part.text.is_empty() {
             continue;
         }
-        if !joined.text.is_empty() {
-            joined.text.push('\n');
-        }
-        let offset = joined.text.matches('\n').count();
-        joined
-            .headings
-            .extend(part.headings.into_iter().map(|mut heading| {
-                heading.line += offset;
-                heading
-            }));
-        joined
-            .anchors
-            .extend(part.anchors.into_iter().map(|mut anchor| {
-                anchor.line += offset;
-                anchor
-            }));
-        joined.links.extend(part.links.into_iter().map(|mut link| {
-            link.line += offset;
-            link
+        append_rendered(&mut joined, part);
+    }
+    joined
+}
+
+// Join one part and return its document-line and canonical-link offsets
+fn append_rendered(joined: &mut Rendered, part: Rendered) -> (usize, usize) {
+    if !joined.text.is_empty() {
+        joined.text.push('\n');
+    }
+    let offset = joined.text.matches('\n').count();
+    let link_offset = joined.links.len();
+    joined
+        .headings
+        .extend(part.headings.into_iter().map(|mut heading| {
+            heading.line += offset;
+            heading
         }));
-        joined.text.push_str(&part.text);
+    joined
+        .anchors
+        .extend(part.anchors.into_iter().map(|mut anchor| {
+            anchor.line += offset;
+            anchor
+        }));
+    joined.links.extend(part.links.into_iter().map(|mut link| {
+        link.line += offset;
+        link
+    }));
+    joined.text.push_str(&part.text);
+    (offset, link_offset)
+}
+
+// Shift interaction sidecars with their owning document, never through terminal strings
+fn present_all_interactive(source: &Source, options: &Options) -> InteractiveRendered {
+    let mut joined = InteractiveRendered::default();
+    for (input, format) in &source.parts {
+        let part = present_interactive(input, *format, options);
+        if part.document.text.is_empty() {
+            continue;
+        }
+        let (offset, link_offset) = append_rendered(&mut joined.document, part.document);
+        joined
+            .link_regions
+            .extend(part.link_regions.into_iter().map(|mut region| {
+                region.link += link_offset;
+                for span in &mut region.spans {
+                    span.line += offset;
+                }
+                region
+            }));
+        joined
+            .images
+            .extend(part.images.into_iter().map(|mut image| {
+                image.line += offset;
+                image
+            }));
     }
     joined
 }
@@ -328,26 +364,33 @@ fn show(args: &Args, source: &Source) -> ExitCode {
         return write_out(&outline(&present_all(source, &plain).headings, &options));
     }
 
-    // Half-blocks first: they work in the pager, and decide whether paging is needed
-    let rendered = present_all(source, &options);
+    // Keep fallback text and trusted pixel assets separate until the pager owns them
+    let protocol = native_protocol();
+    let mut interactive = options.clone();
+    if color && protocol == Protocol::Kitty {
+        interactive.images.protocol = Protocol::Kitty;
+    }
+    let rendered = present_all_interactive(source, &interactive);
 
     // Page when wanted and the terminal can be taken over, otherwise fall through to a plain write
-    if should_page(&args.paging, &rendered.text)
+    if should_page(&args.paging, &rendered.document.text)
         && let Ok(session) = pager::Session::open()
     {
-        let mut width = options.width;
-        let mut relayout = |columns: usize| {
-            let next = auto_width(columns, source.is_wide());
-            (args.width.is_none() && next != width).then(|| {
-                width = next;
-                present_all(
-                    source,
-                    &Options {
-                        width,
-                        ..options.clone()
-                    },
-                )
-            })
+        // The render above already used this geometry, so the pager need not repeat it
+        let mut previous = term::size();
+        let mut relayout = |size: term::Size| {
+            if previous == Some(size) {
+                return None;
+            }
+            previous = Some(size);
+            let mut next = interactive.clone();
+            next.width = args.width.map_or_else(
+                || auto_width(size.columns, source.is_wide()),
+                |width| width.max(MIN_WIDTH),
+            );
+            next.images = images_for_size(source.images, source.base.clone(), Some(size));
+            next.images.protocol = interactive.images.protocol;
+            Some(present_all_interactive(source, &next))
         };
         return match session.run(&source.title, rendered, &mut relayout) {
             Ok(()) => ExitCode::SUCCESS,
@@ -359,13 +402,12 @@ fn show(args: &Args, source: &Source) -> ExitCode {
     }
 
     // Straight to the terminal, a native graphics protocol draws sharper pictures
-    let protocol = native_protocol();
     let output = if protocol != Protocol::HalfBlock && options.images.mode != ImageMode::Never {
         let mut native = options.clone();
         native.images.protocol = protocol;
         present_all(source, &native).text
     } else {
-        rendered.text
+        rendered.document.text
     };
 
     write_out(&output)
@@ -515,7 +557,15 @@ fn parse_image_mode(value: &str) -> Option<ImageMode> {
 
 // Build image settings from the mode, base and the terminal's cell geometry, half-blocks by default
 fn resolve_images(mode: ImageMode, base: Option<String>) -> ImageOptions {
-    let size = term::size();
+    images_for_size(mode, base, term::size())
+}
+
+// Refit images for full geometry, including height-only and cell-pixel changes
+fn images_for_size(
+    mode: ImageMode,
+    base: Option<String>,
+    size: Option<term::Size>,
+) -> ImageOptions {
     let cell = size
         .and_then(|size| {
             let (width, height) = size.pixels?;
@@ -539,10 +589,16 @@ fn resolve_images(mode: ImageMode, base: Option<String>) -> ImageOptions {
 fn native_protocol() -> Protocol {
     let env = |key: &str| std::env::var(key).unwrap_or_default();
     // Inside tmux the escapes would need passthrough wrapping, so stay with half-blocks
-    if !io::stdout().is_terminal() || std::env::var_os(ENV_TMUX).is_some() {
+    if !io::stdout().is_terminal()
+        || std::env::var_os(ENV_TMUX).is_some()
+        || std::env::var_os(ENV_STY).is_some()
+    {
         return Protocol::HalfBlock;
     }
     let term = env(ENV_TERM);
+    if term == "dumb" || term.starts_with("screen") || term.starts_with("tmux") {
+        return Protocol::HalfBlock;
+    }
     let program = env(ENV_TERM_PROGRAM);
     if std::env::var_os(ENV_KITTY_WINDOW).is_some()
         || KITTY_TERMS.contains(&term.as_str())

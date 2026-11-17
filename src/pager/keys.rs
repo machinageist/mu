@@ -40,6 +40,20 @@ pub(super) enum Action {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MouseEvent {
+    LeftPress { column: usize, row: usize },
+    WheelUp,
+    WheelDown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct GraphicsReply {
+    pub image: u32,
+    pub placement: Option<u32>,
+    pub ok: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Key {
     Char(char),
     Ctrl(u8),
@@ -49,18 +63,36 @@ pub(super) enum Key {
     Esc,
     // A navigation key sent as an escape sequence: arrows, Home, End, PgUp, PgDn
     Nav(Action),
+    Mouse(MouseEvent),
+    Graphics(GraphicsReply),
 }
 
 // Retained input is bounded even if a terminal sends a sequence with no final byte.
 const MAX_PENDING_BYTES: usize = 256;
 
+// An APC is terminated only by ST (ESC backslash), never by an embedded key/CSI.
+#[derive(Default)]
+struct Apc {
+    discarded: bool,
+    escape: bool,
+}
+
+enum DiscardSequence {
+    // A deadline can split ESC [ from M and its three opaque legacy payload bytes.
+    CsiStart,
+    Other,
+}
+
 // Decode terminal reads without making read boundaries into key boundaries.
 #[derive(Default)]
 pub(super) struct Decoder {
     pending: Vec<u8>,
+    legacy_remaining: u8,
+    legacy_timed_out: bool,
+    apc: Option<Apc>,
     // After an invalid or oversized sequence, consume its suffix through the final byte
     // instead of interpreting that suffix as ordinary pager commands.
-    discard_sequence: bool,
+    discard_sequence: Option<DiscardSequence>,
 }
 
 impl Decoder {
@@ -71,16 +103,47 @@ impl Decoder {
     pub(super) fn feed(&mut self, bytes: &[u8]) -> Vec<Key> {
         let mut keys = Vec::new();
         for &byte in bytes {
-            if self.discard_sequence {
+            if self.legacy_remaining > 0 {
+                self.legacy_remaining -= 1;
+                continue;
+            }
+            // Ctrl-C remains an explicit way to quit an unterminated control. A legacy
+            // mouse packet is different: its next three bytes are always opaque payload.
+            if byte == CTRL_C
+                && (self.apc.is_some()
+                    || self.discard_sequence.is_some()
+                    || self.pending.starts_with(&[ESC, b'['])
+                    || self.pending.starts_with(&[ESC, b'O']))
+            {
+                self.pending.clear();
+                self.apc = None;
+                self.discard_sequence = None;
+                keys.push(Key::Ctrl(CTRL_C));
+                continue;
+            }
+            if self.apc.is_some() {
+                self.apc_byte(byte, &mut keys);
+                continue;
+            }
+            if let Some(discard) = self.discard_sequence.take() {
                 if byte == ESC {
-                    self.discard_sequence = false;
                     self.pending.push(ESC);
                 } else if (0x40..=0x7e).contains(&byte) {
-                    self.discard_sequence = false;
+                    if matches!(discard, DiscardSequence::CsiStart) && byte == b'M' {
+                        self.legacy_remaining = 3;
+                        self.legacy_timed_out = true;
+                    }
+                } else {
+                    self.discard_sequence = Some(DiscardSequence::Other);
                 }
                 continue;
             }
             match self.pending.as_slice() {
+                [ESC] if byte == b'_' => {
+                    self.pending.clear();
+                    self.apc = Some(Apc::default());
+                    continue;
+                }
                 [ESC] if matches!(byte, b'[' | b'O') => {
                     self.pending.push(byte);
                     continue;
@@ -100,8 +163,12 @@ impl Decoder {
                         if self.pending.len() < MAX_PENDING_BYTES
                             && params.iter().all(|byte| (0x30..=0x3f).contains(byte))
                         {
-                            self.pending.push(byte);
-                            keys.extend(parse_keys(&self.pending));
+                            if self.pending.as_slice() == [ESC, b'['] && byte == b'M' {
+                                self.legacy_remaining = 3;
+                                self.legacy_timed_out = false;
+                            } else {
+                                keys.extend(escape_key(self.pending[1], params, byte));
+                            }
                         }
                         self.pending.clear();
                     } else if (0x20..=0x3f).contains(&byte)
@@ -115,7 +182,7 @@ impl Decoder {
                         self.pending.push(byte);
                     } else {
                         self.pending.clear();
-                        self.discard_sequence = true;
+                        self.discard_sequence = Some(DiscardSequence::Other);
                     }
                     continue;
                 }
@@ -150,72 +217,137 @@ impl Decoder {
         keys
     }
 
-    pub(super) fn has_pending(&self) -> bool {
-        !self.pending.is_empty() || self.discard_sequence
+    fn apc_byte(&mut self, byte: u8, keys: &mut Vec<Key>) {
+        let apc = self.apc.as_mut().expect("active APC");
+        if apc.escape && byte == b'\\' {
+            if !apc.discarded {
+                keys.extend(graphics_reply(&self.pending).map(Key::Graphics));
+            }
+            self.pending.clear();
+            self.apc = None;
+            return;
+        }
+        if apc.escape || (byte != ESC && self.pending.len() == MAX_PENDING_BYTES) {
+            apc.discarded = true;
+            self.pending.clear();
+        }
+        apc.escape = byte == ESC;
+        if !apc.discarded && !apc.escape {
+            self.pending.push(byte);
+        }
     }
 
-    // Called at the input deadline: only a lone ESC becomes a key. Other partial input
-    // is dropped as a unit so parameter bytes cannot become pager commands.
+    pub(super) fn has_pending(&self) -> bool {
+        // Quarantine needs no further deadline: it holds no bytes and only waits for
+        // a terminator (or Ctrl-C). Reporting it here would repeatedly arm idle timers.
+        if let Some(apc) = &self.apc {
+            return !apc.discarded;
+        }
+        !self.pending.is_empty() || (self.legacy_remaining > 0 && !self.legacy_timed_out)
+    }
+
+    // Called at the input deadline: only a lone ESC becomes a key. Drop retained
+    // bytes, but quarantine partial controls through their boundary so a late suffix
+    // cannot become pager commands. Incomplete UTF-8 is simply dropped.
     pub(super) fn flush(&mut self) -> Vec<Key> {
+        if let Some(apc) = &mut self.apc {
+            apc.discarded = true;
+            self.pending.clear();
+            return Vec::new();
+        }
+        if self.pending.starts_with(&[ESC, b'[']) || self.pending.starts_with(&[ESC, b'O']) {
+            self.discard_sequence = Some(if self.pending.as_slice() == [ESC, b'['] {
+                DiscardSequence::CsiStart
+            } else {
+                DiscardSequence::Other
+            });
+        }
+        self.legacy_timed_out |= self.legacy_remaining > 0;
         let keys = if self.pending.as_slice() == [ESC] {
             vec![Key::Esc]
         } else {
             Vec::new()
         };
         self.pending.clear();
-        self.discard_sequence = false;
         keys
     }
 }
 
-// Decode a read's worth of bytes into keys, skipping sequences with no meaning here
+// Test convenience wrapper over the same parser used for incremental input.
+#[cfg(test)]
 pub(super) fn parse_keys(bytes: &[u8]) -> Vec<Key> {
-    let mut keys = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        let introducer = bytes.get(index + 1).copied();
-        if byte == ESC && matches!(introducer, Some(b'[' | b'O')) {
-            let params_start = index + 2;
-            let final_offset = bytes[params_start..]
-                .iter()
-                .position(|byte| (0x40..=0x7E).contains(byte));
-            let Some(offset) = final_offset else {
-                break;
-            };
-            let end = params_start + offset;
-            keys.extend(escape_action(&bytes[params_start..end], bytes[end]).map(Key::Nav));
-            index = end + 1;
-            continue;
-        }
-        let (key, used) = match byte {
-            ESC => (Some(Key::Esc), 1),
-            b'\r' | b'\n' => (Some(Key::Enter), 1),
-            DEL | BACKSPACE => (Some(Key::Backspace), 1),
-            b'\t' => (Some(Key::Tab), 1),
-            0x00..=0x1f => (Some(Key::Ctrl(byte)), 1),
-            0x20..=0x7e => (Some(Key::Char(char::from(byte))), 1),
-            _ => decode_utf8(&bytes[index..]),
-        };
-        keys.extend(key);
-        index += used;
-    }
+    let mut decoder = Decoder::new();
+    let mut keys = decoder.feed(bytes);
+    keys.extend(decoder.flush());
     keys
 }
 
-// Decode one UTF-8 character, or skip one byte when it is not valid
-fn decode_utf8(bytes: &[u8]) -> (Option<Key>, usize) {
-    let length = match bytes[0] {
-        0xc2..=0xdf => 2,
-        0xe0..=0xef => 3,
-        0xf0..=0xf4 => 4,
-        _ => return (None, 1),
+// Decode reply identity only; the pager decides whether these IDs are owned/in flight.
+fn graphics_reply(bytes: &[u8]) -> Option<GraphicsReply> {
+    let body = bytes.strip_prefix(b"Gi=")?;
+    let separator = body.iter().position(|&byte| byte == b';')?;
+    let (identity, status) = body.split_at(separator);
+    let status = &status[1..];
+    if status.is_empty() || !status.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+        return None;
+    }
+    let mut fields = identity.split(|&byte| byte == b',');
+    let image = u32::try_from(decimal(fields.next()?)?).ok()?;
+    let placement = match fields.next() {
+        Some(field) => Some(u32::try_from(decimal(field.strip_prefix(b"p=")?)?).ok()?),
+        None => None,
     };
-    bytes
-        .get(..length)
-        .and_then(|encoded| std::str::from_utf8(encoded).ok())
-        .and_then(|text| text.chars().next())
-        .map_or((None, 1), |ch| (Some(Key::Char(ch)), length))
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(GraphicsReply {
+        image,
+        placement,
+        ok: status == b"OK",
+    })
+}
+
+// Mouse-marked controls must never reach the deliberately permissive arrow parser.
+fn escape_key(introducer: u8, params: &[u8], final_byte: u8) -> Option<Key> {
+    if params.contains(&b'<') {
+        return (introducer == b'[')
+            .then(|| mouse_event(params, final_byte))
+            .flatten()
+            .map(Key::Mouse);
+    }
+    escape_action(params, final_byte).map(Key::Nav)
+}
+
+fn mouse_event(params: &[u8], final_byte: u8) -> Option<MouseEvent> {
+    if final_byte != b'M' {
+        return None;
+    }
+    let mut fields = params.strip_prefix(b"<")?.split(|&byte| byte == b';');
+    let button = decimal(fields.next()?)?;
+    // SGR coordinates are positive 1-based values. Convert exactly once here.
+    let column = decimal(fields.next()?)?.checked_sub(1)?;
+    let row = decimal(fields.next()?)?.checked_sub(1)?;
+    if fields.next().is_some() {
+        return None;
+    }
+    match button {
+        0 => Some(MouseEvent::LeftPress { column, row }),
+        64 => Some(MouseEvent::WheelUp),
+        65 => Some(MouseEvent::WheelDown),
+        _ => None,
+    }
+}
+
+// Empty, signed, nondecimal and overflowing fields are not numbers.
+fn decimal(bytes: &[u8]) -> Option<usize> {
+    if bytes.is_empty() {
+        return None;
+    }
+    bytes.iter().try_fold(0usize, |value, &byte| {
+        byte.is_ascii_digit()
+            .then_some(())
+            .and_then(|()| value.checked_mul(10)?.checked_add(usize::from(byte - b'0')))
+    })
 }
 
 // Map a CSI or SS3 key sequence to an action

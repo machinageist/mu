@@ -5,17 +5,18 @@
 // inline content is buffered per block, wrapped once, then written behind those gutters
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use pulldown_cmark::{
     BlockQuoteKind, CodeBlockKind, Event, LinkType, Options as ParseOptions, Parser, Tag, TagEnd,
 };
-use unicode_width::UnicodeWidthChar;
 
 use crate::data::Span;
+use crate::display;
 use crate::highlight;
 use crate::hyperlink;
-use crate::image::{self, ImageMode, ImageOptions};
-use crate::inline::{Atom, CONTROL_REPLACEMENT, Inline, Line, push_clean, text_width, wrap};
+use crate::image::{self, ImageMode, ImageOptions, Protocol};
+use crate::inline::{Atom, Inline, Line, push_clean, text_width, wrap};
 use crate::style::{
     ATTR_BOLD, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, FG_CODE, FG_LINK, STYLE_ALERT_CAUTION,
     STYLE_ALERT_IMPORTANT, STYLE_ALERT_NOTE, STYLE_ALERT_TIP, STYLE_ALERT_WARNING, STYLE_BULLET,
@@ -69,6 +70,9 @@ pub(crate) const TAB_STOP: usize = 4;
 
 // Narrowest content column, even when deeply nested on a narrow terminal
 const MIN_CONTENT_WIDTH: usize = 16;
+
+// Total captured native RGBA per layout, separate from text fallback and decoding.
+const MAX_CAPTURE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]
 pub struct Options {
@@ -134,25 +138,21 @@ struct Raw {
 fn raw_anchor_rows(raw: &Raw, limit: usize) -> Vec<(String, usize, usize)> {
     let mut mapped = Vec::with_capacity(raw.anchors.len());
     let (mut index, mut row, mut column, mut source_column) = (0, 0, 0, 0);
-    for (offset, ch) in raw
-        .text
-        .char_indices()
-        .map(|(at, ch)| (at, Some(ch)))
-        .chain(std::iter::once((raw.text.len(), None)))
-    {
-        let width = match ch {
-            Some('\n' | '\r') | None => 0,
-            Some('\t') => TAB_STOP - source_column % TAB_STOP,
-            Some(ch) if ch.is_control() => 1,
-            Some(ch) => ch.width().unwrap_or(0),
+    let mut offset = 0;
+    for (unit, unit_width) in display::units(&raw.text) {
+        let width = match unit {
+            "\n" | "\r" | "\r\n" => 0,
+            "\t" => TAB_STOP - source_column % TAB_STOP,
+            _ if unit.chars().any(char::is_control) => 1,
+            _ => unit_width,
         };
-        let first = if ch == Some('\t') { 1 } else { width };
+        let first = if unit == "\t" { 1 } else { width };
         if column > 0 && column + first > limit {
             row += 1;
             column = 0;
         }
         // A newline, indentation, or EOF cannot give an unpainted ID a destination.
-        if ch.is_some_and(|ch| !ch.is_whitespace()) && width > 0 {
+        if !unit.chars().all(char::is_whitespace) && width > 0 {
             while let Some((at, id)) = raw.anchors.get(index) {
                 if *at > offset {
                     break;
@@ -161,11 +161,11 @@ fn raw_anchor_rows(raw: &Raw, limit: usize) -> Vec<(String, usize, usize)> {
                 index += 1;
             }
         }
-        if ch == Some('\n') {
+        if unit.contains('\n') {
             row += 1;
             column = 0;
             source_column = 0;
-        } else if ch == Some('\t') {
+        } else if unit == "\t" {
             for _ in 0..width {
                 if column >= limit {
                     row += 1;
@@ -178,6 +178,7 @@ fn raw_anchor_rows(raw: &Raw, limit: usize) -> Vec<(String, usize, usize)> {
             column += width;
             source_column += width;
         }
+        offset += unit.len();
     }
     mapped
 }
@@ -224,6 +225,47 @@ pub struct Rendered {
     pub links: Vec<NavigationLink>,
 }
 
+/// A zero-based, half-open range of actual label-owned display columns.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NavigationSpan {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Display spans belonging to one entry in the final canonical `Rendered::links`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinkRegion {
+    pub link: usize,
+    pub spans: Vec<NavigationSpan>,
+}
+
+/// Row-major straight (not premultiplied) RGBA, at the fitted cell-pixel size.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RasterImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Arc<[u8]>,
+}
+
+/// An image body only: captions and container gutters are outside its cell box.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RenderedImage {
+    pub line: usize,
+    pub column: usize,
+    pub columns: usize,
+    pub rows: usize,
+    pub raster: Arc<RasterImage>,
+}
+
+/// Opt-in layout metadata; `document.text` always retains usable text fallback.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InteractiveRendered {
+    pub document: Rendered,
+    pub link_regions: Vec<LinkRegion>,
+    pub images: Vec<RenderedImage>,
+}
+
 struct Renderer<'o> {
     options: &'o Options,
     out: String,
@@ -233,6 +275,10 @@ struct Renderer<'o> {
     pending_anchors: Vec<String>,
     navigation: bool,
     navigation_links: Vec<NavigationLink>,
+    link_spans: Vec<Vec<NavigationSpan>>,
+    interactive: bool,
+    captured_images: Vec<RenderedImage>,
+    captured_bytes: usize,
     // Newlines in `out` up to `counted_bytes`, so each heading's line costs only the new text
     counted_bytes: usize,
     counted_lines: usize,
@@ -313,6 +359,47 @@ pub(crate) fn render_annotated_events<'a>(
     renderer.finish()
 }
 
+// The opt-in layout uses the same event walker and fallback text as legacy rendering.
+pub(crate) fn render_interactive_events<'a>(
+    events: impl IntoIterator<Item = DocumentEvent<'a>>,
+    options: &Options,
+    capacity: usize,
+    navigation: bool,
+) -> InteractiveRendered {
+    let mut renderer = Renderer::new(options, capacity);
+    renderer.navigation = navigation;
+    renderer.interactive = true;
+    for event in events {
+        match event {
+            DocumentEvent::Markup(event) => renderer.event(event),
+            DocumentEvent::Anchor(id) => renderer.anchor(id),
+            DocumentEvent::ChapterStart | DocumentEvent::ChapterEnd => renderer.chapter_boundary(),
+        }
+    }
+    renderer.finish_interactive()
+}
+
+pub(crate) fn render_interactive_markup<'a>(
+    events: impl IntoIterator<Item = Event<'a>>,
+    options: &Options,
+    capacity: usize,
+) -> InteractiveRendered {
+    render_interactive_events(
+        events.into_iter().map(DocumentEvent::Markup),
+        options,
+        capacity,
+        false,
+    )
+}
+
+pub(crate) fn render_interactive_markdown(input: &str, options: &Options) -> InteractiveRendered {
+    render_interactive_markup(
+        Parser::new_ext(input, parse_options(input)),
+        options,
+        input.len(),
+    )
+}
+
 // Lay out events for a data table, whose columns stop shrinking at `min_column` and overflow instead
 pub(crate) fn render_table_events<'a>(
     events: impl IntoIterator<Item = Event<'a>>,
@@ -373,12 +460,12 @@ struct Chunker<'c> {
 
 impl Chunker<'_> {
     // Append one glyph, starting a new chunk when the current one is full
-    fn push(&mut self, glyph: char, width: usize) {
-        if self.width + width > self.limit && self.width > 0 {
+    fn push(&mut self, glyph: &str, width: usize) {
+        if width > 0 && self.width + width > self.limit && self.width > 0 {
             self.chunks.push(std::mem::take(&mut self.chunk));
             self.width = 0;
         }
-        self.chunk.push(glyph);
+        self.chunk.push_str(glyph);
         self.width += width;
         self.column += width;
     }
@@ -398,16 +485,16 @@ fn verbatim_chunks(line: &str, limit: usize, chunks: &mut Vec<String>) {
         column: 0,
         limit,
     };
-    for ch in line.chars() {
-        match ch {
-            '\r' => {}
-            '\t' => {
+    for (unit, width) in display::units(line) {
+        match unit {
+            "\r" => {}
+            "\t" => {
                 for _ in 0..TAB_STOP - chunker.column % TAB_STOP {
-                    chunker.push(' ', 1);
+                    chunker.push(" ", 1);
                 }
             }
-            _ if ch.is_control() => chunker.push(CONTROL_REPLACEMENT, 1),
-            _ => chunker.push(ch, ch.width().unwrap_or(0)),
+            _ if unit.chars().any(char::is_control) => chunker.push("\u{fffd}", 1),
+            _ => chunker.push(unit, width),
         }
     }
     let last = chunker.chunk;
@@ -424,14 +511,14 @@ struct StyledChunker {
 
 impl StyledChunker {
     // Append one glyph in a style, starting a new chunk when the current one is full
-    fn push(&mut self, glyph: char, width: usize, style: Style) {
-        if self.width + width > self.limit && self.width > 0 {
+    fn push(&mut self, glyph: &str, width: usize, style: Style) {
+        if width > 0 && self.width + width > self.limit && self.width > 0 {
             self.chunks.push(Vec::new());
             self.width = 0;
         }
         if let Some(chunk) = self.chunks.last_mut() {
             match chunk.last_mut() {
-                Some((last, text)) if *last == style => text.push(glyph),
+                Some((last, text)) if *last == style => text.push_str(glyph),
                 _ => chunk.push((style, glyph.to_string())),
             }
         }
@@ -449,20 +536,23 @@ fn styled_chunks(line: &[Span], limit: usize) -> Vec<Vec<Span>> {
         column: 0,
         limit,
     };
-    for (style, text) in line {
-        for ch in text.chars() {
-            match ch {
-                '\r' => {}
-                '\t' => {
-                    for _ in 0..TAB_STOP - chunker.column % TAB_STOP {
-                        chunker.push(' ', 1, *style);
-                    }
+    display::styled_units(line, |unit, width, fragments| {
+        let style = fragments[0].0;
+        match unit {
+            "\r" => {}
+            "\t" => {
+                for _ in 0..TAB_STOP - chunker.column % TAB_STOP {
+                    chunker.push(" ", 1, style);
                 }
-                _ if ch.is_control() => chunker.push(CONTROL_REPLACEMENT, 1, *style),
-                _ => chunker.push(ch, ch.width().unwrap_or(0), *style),
+            }
+            _ if unit.chars().any(char::is_control) => chunker.push("\u{fffd}", 1, style),
+            _ => {
+                for (index, &(style, text)) in fragments.iter().enumerate() {
+                    chunker.push(text, if index == 0 { width } else { 0 }, style);
+                }
             }
         }
-    }
+    });
     chunker.chunks
 }
 
@@ -478,6 +568,10 @@ impl<'o> Renderer<'o> {
             pending_anchors: Vec::new(),
             navigation: false,
             navigation_links: Vec::new(),
+            link_spans: Vec::new(),
+            interactive: false,
+            captured_images: Vec::new(),
+            captured_bytes: 0,
             counted_bytes: 0,
             counted_lines: 0,
             inline: Inline::default(),
@@ -496,15 +590,32 @@ impl<'o> Renderer<'o> {
     }
 
     // Flush whatever is still buffered and hand back the output
-    fn finish(mut self) -> Rendered {
+    fn finish(self) -> Rendered {
+        self.finish_interactive().document
+    }
+
+    fn finish_interactive(mut self) -> InteractiveRendered {
         self.flush_inline();
-        self.navigation_links
-            .retain(|link| link.line != usize::MAX && self.anchor_ids.contains(&link.target));
-        Rendered {
-            text: self.out,
-            headings: self.headings,
-            anchors: self.anchors,
-            links: self.navigation_links,
+        let mut links = Vec::new();
+        let mut link_regions = Vec::new();
+        for (link, spans) in self.navigation_links.into_iter().zip(self.link_spans) {
+            if link.line != usize::MAX && self.anchor_ids.contains(&link.target) {
+                link_regions.push(LinkRegion {
+                    link: links.len(),
+                    spans,
+                });
+                links.push(link);
+            }
+        }
+        InteractiveRendered {
+            document: Rendered {
+                text: self.out,
+                headings: self.headings,
+                anchors: self.anchors,
+                links,
+            },
+            link_regions,
+            images: self.captured_images,
         }
     }
 
@@ -768,7 +879,14 @@ impl<'o> Renderer<'o> {
             for (id, column) in &line.anchors {
                 self.record_anchor(id.clone(), index, gutter + column);
             }
-            for &(link, column) in &line.links {
+            for &(link, column, end) in &line.links {
+                self.link_spans[link].push(NavigationSpan {
+                    line: index,
+                    start: gutter + column,
+                    end: gutter + end,
+                });
+            }
+            for &(link, column) in &line.navigation_starts {
                 if let Some(link) = self.navigation_links.get_mut(link)
                     && link.line == usize::MAX
                 {
@@ -1347,6 +1465,7 @@ impl<'o> Renderer<'o> {
                     line: usize::MAX,
                     column: 0,
                 });
+                self.link_spans.push(Vec::new());
                 index
             });
         let shown =
@@ -1459,12 +1578,39 @@ impl<'o> Renderer<'o> {
         let Some(picture) = image::load_cached(&image.src, options) else {
             return false;
         };
-        let lines = image::draw_guarded(&picture, self.avail(), options);
+        let mut fallback = options.clone();
+        if self.interactive {
+            fallback.protocol = Protocol::HalfBlock;
+        }
+        let lines = image::draw_guarded(&picture, self.avail(), &fallback);
         if lines.is_empty() {
             return false;
         }
         let alt = image.alt.trim().to_owned();
         let image_end = image.end;
+        if self.interactive
+            && options.protocol == Protocol::Kitty
+            && let Some((raster, columns, rows)) = image::capture_guarded(
+                &picture,
+                self.avail(),
+                options,
+                MAX_CAPTURE_BYTES - self.captured_bytes,
+            )
+        {
+            self.captured_bytes += raster.pixels.len();
+            let line = self.current_line();
+            self.captured_images.push(RenderedImage {
+                line,
+                column: self.gutter_width(),
+                columns,
+                rows,
+                raster: Arc::new(RasterImage {
+                    width: raster.width,
+                    height: raster.height,
+                    pixels: raster.pixels.into(),
+                }),
+            });
+        }
         self.defer_inline_anchors(image_end);
         for line in lines {
             self.bind_pending_anchors(self.gutter_width());

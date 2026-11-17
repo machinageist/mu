@@ -5,6 +5,7 @@
 // resize re-renders the document instead of reflowing old lines. Every rendered line closes its
 // own style, which is what lets any window of lines be drawn on its own
 
+mod graphics;
 mod keys;
 mod outline;
 mod search;
@@ -18,15 +19,19 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+#[cfg(test)]
+use unicode_width::UnicodeWidthStr;
 
-use mu::{Anchor, Heading, NavigationLink, Rendered, outline_entries};
+use mu::{
+    Anchor, Heading, InteractiveRendered, LinkRegion, NavigationLink, Rendered, RenderedImage,
+    display, outline_entries,
+};
 
 use crate::term::{self, Size};
 
 #[cfg(test)]
 use keys::parse_keys;
-use keys::{Action, CTRL_C, CTRL_U, Decoder, Key, normal_action};
+use keys::{Action, CTRL_C, CTRL_U, Decoder, Key, MouseEvent, normal_action};
 use outline::Outline;
 use search::{Direction, Hit, Match, Search, Token, highlight, strip_sgr, tokens};
 
@@ -35,6 +40,10 @@ const TTY_PATH: &str = "/dev/tty";
 // Screen setup: alternate screen, hidden cursor, no autowrap, mouse wheel sent as arrow keys
 const SCREEN_ENTER: &str = "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1007h";
 const SCREEN_LEAVE: &str = "\x1b[?1007l\x1b[?7h\x1b[?25h\x1b[?1049l";
+const MOUSE_ENTER: &str = "\x1b[?1000h\x1b[?1006h";
+const MOUSE_LEAVE: &str = "\x1b[?1000l\x1b[?1006l";
+const IMAGE_PLACEHOLDER: char = '\u{10eeee}';
+const IMAGE_REPLACEMENT: char = '\u{fffd}';
 
 // Frame drawing
 const SYNC_BEGIN: &str = "\x1b[?2026h";
@@ -74,7 +83,16 @@ const KEY_BUFFER_SIZE: usize = 64;
 const KEY_SEQUENCE_WAIT: Duration = Duration::from_millis(100);
 
 // Terminal settings to put back if a panic ends the process mid-session
-static ACTIVE_MODE: Mutex<Option<(RawFd, libc::termios, bool)>> = Mutex::new(None);
+static ACTIVE_MODE: Mutex<Option<ActiveMode>> = Mutex::new(None);
+
+// Cleanup responsibility is registered before any mode or graphics bytes are written
+struct ActiveMode {
+    fd: RawFd,
+    original: libc::termios,
+    hyperlinks: bool,
+    mouse: bool,
+    images: Vec<u32>,
+}
 
 // Write end of the resize pipe, read by the signal handler
 static RESIZE_WAKE_FD: AtomicI32 = AtomicI32::new(-1);
@@ -155,7 +173,7 @@ impl Document {
         };
         document.widest = (0..document.len())
             .filter_map(|index| document.line(index))
-            .map(|line| strip_sgr(line).width())
+            .map(|line| display::width(&strip_sgr(line)))
             .max()
             .unwrap_or(0);
         document
@@ -194,6 +212,8 @@ struct Pager {
     // Keep source encounter order stable; layout order may change when table cells reflow
     links: Vec<NavigationLink>,
     link_order: Vec<usize>,
+    regions: Vec<LinkRegion>,
+    managed_images: bool,
     // Selection indexes link_order; return history indexes the stable source vector
     selected_link: Option<usize>,
     history: VecDeque<Visit>,
@@ -227,6 +247,8 @@ impl Pager {
             anchors: HashMap::new(),
             links: Vec::new(),
             link_order: Vec::new(),
+            regions: Vec::new(),
+            managed_images: false,
             selected_link: None,
             history: VecDeque::new(),
             view,
@@ -247,6 +269,10 @@ impl Pager {
     fn handle(&mut self, key: Key) -> bool {
         self.note = None;
         self.wrapped = false;
+        if let Key::Mouse(event) = key {
+            self.mouse(event);
+            return false;
+        }
         if let Some((_, typed)) = &mut self.prompt {
             match key {
                 Key::Char(ch) => typed.push(ch),
@@ -337,9 +363,6 @@ impl Pager {
                     .or_insert((anchor.line, anchor.column));
             }
         }
-        links.retain(|link| {
-            link.line < self.document.len() && self.anchors.contains_key(&link.target)
-        });
         for link in &mut links {
             let plain: String = link.label.chars().filter(|ch| !ch.is_control()).collect();
             link.label = plain.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -372,12 +395,76 @@ impl Pager {
             true
         });
         self.links = links;
-        self.link_order = (0..self.links.len()).collect();
+        self.link_order = (0..self.links.len())
+            .filter(|&index| {
+                let link = &self.links[index];
+                link.line < self.document.len() && self.anchors.contains_key(&link.target)
+            })
+            .collect();
         self.link_order.sort_by_key(|&source| {
             let link = &self.links[source];
             (link.line, link.column)
         });
         self.selected_link = None;
+    }
+
+    // Follow a painted label cell without revealing its possibly off-screen first word
+    fn mouse(&mut self, event: MouseEvent) {
+        if self.prompt.is_some() {
+            return;
+        }
+        let action = match event {
+            MouseEvent::WheelUp => Some(Action::LineUp),
+            MouseEvent::WheelDown => Some(Action::LineDown),
+            MouseEvent::LeftPress { .. } => None,
+        };
+        if let Some(outline) = &mut self.outline {
+            if let Some(action) = action {
+                outline.apply(action, self.headings.len(), self.view.rows);
+            }
+            return;
+        }
+        if let Some(action) = action {
+            self.handle(Key::Nav(action));
+            return;
+        }
+        let MouseEvent::LeftPress { column, row } = event else {
+            return;
+        };
+        if row >= self.view.rows || column >= self.columns {
+            return;
+        }
+        let line = self.view.top.saturating_add(row);
+        let column = self.left.saturating_add(column);
+        let Some(text) = self.document.line(line) else {
+            return;
+        };
+        let plain = strip_sgr(text);
+        let mut at = 0;
+        let mut fully_visible = false;
+        for (_, width) in display::units(&plain) {
+            let end = at + width;
+            if (at..end).contains(&column) {
+                fully_visible = at >= self.left && end <= self.left.saturating_add(self.columns);
+                break;
+            }
+            at = end;
+        }
+        if !fully_visible {
+            return;
+        }
+        let source = self.regions.iter().find_map(|region| {
+            (self.link_order.contains(&region.link)
+                && region
+                    .spans
+                    .iter()
+                    .any(|span| span.line == line && (span.start..span.end).contains(&column)))
+            .then_some(region.link)
+        });
+        if let Some(source) = source {
+            self.selected_link = None;
+            self.follow_source(source);
+        }
     }
 
     // Cycle through source links in document order, starting at the current viewport.
@@ -428,9 +515,9 @@ impl Pager {
         let link = &self.links[self.link_order[index]];
         self.view.show(link.line);
         let available = self.document.line(link.line).map_or(0, |line| {
-            strip_sgr(line).width().saturating_sub(link.column)
+            display::width(&strip_sgr(line)).saturating_sub(link.column)
         });
-        self.reveal_column(link.column, link.label.width().min(available));
+        self.reveal_column(link.column, display::width(&link.label).min(available));
     }
 
     // Reveal a navigation position without losing selection to a manual scroll action
@@ -452,6 +539,11 @@ impl Pager {
         let Some(&source) = self.link_order.get(index) else {
             return;
         };
+        self.follow_source(source);
+    }
+
+    // Keyboard and mouse share canonical source identity and the exact departure view
+    fn follow_source(&mut self, source: usize) {
         let Some((line, column)) = self
             .links
             .get(source)
@@ -525,7 +617,8 @@ impl Pager {
             return;
         };
         let shown = strip_sgr(line);
-        let width_of = |chars: usize| shown.chars().take(chars).collect::<String>().width();
+        let width_of =
+            |chars: usize| display::width(&shown.chars().take(chars).collect::<String>());
         let (start, end) = (width_of(found.start), width_of(found.end));
         if start < self.left || end > self.left + self.columns {
             self.left = start
@@ -579,16 +672,16 @@ impl Pager {
         let word = link
             .label
             .split_whitespace()
-            .find(|word| word.width() > 0)?;
+            .find(|word| display::width(word) > 0)?;
         let first = word.chars().next()?;
         let plain = strip_sgr(line);
         let (mut column, mut byte) = (0, 0);
         // Whole-word widths preserve joined emoji and combining sequences before the source
         for part in plain.split_inclusive(char::is_whitespace) {
-            let width = part.width();
+            let width = display::width(part);
             if column + width > link.column {
                 for (offset, _) in part.char_indices().filter(|(_, ch)| *ch == first) {
-                    if column + part[..offset].width() != link.column {
+                    if column + display::width(&part[..offset]) != link.column {
                         continue;
                     }
                     let matched = plain[byte + offset..]
@@ -628,6 +721,7 @@ impl Pager {
         }
         for row in 0..self.view.rows {
             let index = self.view.top + row;
+            frame.push_str(CLEAR_TO_EOL);
             if let Some(line) = self.document.line(index) {
                 let mut shown = match &self.search {
                     Some(search) => highlight(line, &search.on_line(index)),
@@ -636,15 +730,19 @@ impl Pager {
                 if let Some(selected) = self.selection_match(index, line) {
                     shown = highlight(&shown, &[(selected, true)]);
                 }
-                frame.push_str(&cut_left(&shown, self.left));
+                frame.push_str(&cut_window(&shown, self.left, columns));
                 if shown.contains("\x1b]8;") {
                     frame.push_str(OSC8_CLOSE);
                 }
             }
-            frame.push_str(CLEAR_TO_EOL);
             frame.push_str(ROW_END);
         }
-        frame.push_str(&self.status_line(columns));
+        let status = self.status_line(columns);
+        if self.managed_images {
+            frame.push_str(&mask_placeholders(&status));
+        } else {
+            frame.push_str(&status);
+        }
         frame.push_str(SYNC_END);
     }
 
@@ -653,6 +751,7 @@ impl Pager {
         let entries = outline_entries(&self.headings, columns.saturating_sub(1).max(1));
         for row in 0..self.view.rows {
             let index = outline.top + row;
+            frame.push_str(CLEAR_TO_EOL);
             if let Some(entry) = entries.get(index) {
                 if index == outline.selected {
                     frame.push_str(SELECTED_STYLE);
@@ -662,7 +761,6 @@ impl Pager {
                     frame.push_str(entry);
                 }
             }
-            frame.push_str(CLEAR_TO_EOL);
             frame.push_str(ROW_END);
         }
         let place = format!("{}/{}", outline.selected + 1, self.headings.len());
@@ -670,7 +768,10 @@ impl Pager {
             &format!("{place}  {OUTLINE_HINT} "),
             columns.saturating_sub(2),
         );
-        let left = fit_left(OUTLINE_TITLE, columns.saturating_sub(right.width() + 2));
+        let left = fit_left(
+            OUTLINE_TITLE,
+            columns.saturating_sub(display::width(&right) + 2),
+        );
         frame.push_str(&bar(&left, &right, columns));
     }
 
@@ -717,45 +818,68 @@ impl Pager {
             let label = format!("{}  Enter follow", link.label);
             let focus = format!("[{}/{}]", index + 1, self.link_order.len());
             let right = format!("{focus}  {place}{back} ");
-            if label.width() + right.width() + 2 > columns {
+            if display::width(&label) + display::width(&right) + 2 > columns {
                 // The semantic label matters more than position/history on narrow screens.
                 let hint = format!("Enter follow {focus} ");
-                let hint = if hint.width() + 3 <= columns {
+                let hint = if display::width(&hint) + 3 <= columns {
                     hint
                 } else {
                     format!("{focus} ")
                 };
                 let right = fit_left(&hint, columns.saturating_sub(2));
-                let left = fit_left(&link.label, columns.saturating_sub(right.width() + 2));
+                let left = fit_left(
+                    &link.label,
+                    columns.saturating_sub(display::width(&right) + 2),
+                );
                 return bar(&left, &right, columns);
             }
-            let left = fit_left(&label, columns.saturating_sub(right.width() + 2));
+            let left = fit_left(&label, columns.saturating_sub(display::width(&right) + 2));
             return bar(&left, &right, columns);
         }
-        let links = if self.links.is_empty() {
+        let links = if self.link_order.is_empty() {
             ""
         } else {
             "Tab links  "
         };
         let mut right = format!("{found}{place}{back}  {links}{STATUS_HINT} ");
-        if right.width() + 2 > columns {
+        if display::width(&right) + 2 > columns {
             right = format!("{found}{place}{back} ");
         }
         let right = fit_left(&right, columns.saturating_sub(2));
         let left = self.note.as_deref().unwrap_or(&self.title);
-        let left = fit_left(left, columns.saturating_sub(right.width() + 2));
+        let left = fit_left(left, columns.saturating_sub(display::width(&right) + 2));
         bar(&left, &right, columns)
     }
 }
 
-// Drop the first `left` display columns without splitting SGR or OSC 8 controls.
-// A wide character cut in half becomes spaces for its visible half.
+// Compatibility helper for left-only clipping tests
+#[cfg(test)]
 fn cut_left(line: &str, left: usize) -> String {
-    if left == 0 {
+    cut_window(line, left, usize::MAX)
+}
+
+// Clip both edges using the same indivisible units as layout and mouse geometry.
+// Controls remain whole, including those inside a grapheme; partial units become spaces.
+fn cut_window(line: &str, left: usize, columns: usize) -> String {
+    let plain = strip_sgr(line);
+    if left == 0 && display::width(&plain) <= columns {
         return line.to_owned();
     }
-    let mut out = String::with_capacity(line.len());
+    let right = left.saturating_add(columns);
+    let mut byte = 0;
     let mut column = 0;
+    let units: Vec<_> = display::units(&plain)
+        .map(|(unit, width)| {
+            let start = byte;
+            byte += unit.len();
+            let cell = column;
+            column += width;
+            (start, byte, cell, width)
+        })
+        .collect();
+    let mut out = String::with_capacity(line.len());
+    byte = 0;
+    let mut current = 0;
     for token in tokens(line) {
         let ch = match token {
             Token::Sgr(sequence) | Token::Osc8(sequence) => {
@@ -764,13 +888,19 @@ fn cut_left(line: &str, left: usize) -> String {
             }
             Token::Char(ch) => ch,
         };
-        let width = ch.width().unwrap_or(0);
-        if column >= left {
-            out.push(ch);
-        } else if column + width > left {
-            out.push_str(&" ".repeat(column + width - left));
+        while current < units.len() && byte >= units[current].1 {
+            current += 1;
         }
-        column += width;
+        let Some(&(start, _, column, width)) = units.get(current) else {
+            break;
+        };
+        let end = column + width;
+        if column >= left && end <= right && column < right {
+            out.push(ch);
+        } else if byte == start {
+            out.push_str(&" ".repeat(end.min(right).saturating_sub(column.max(left))));
+        }
+        byte += ch.len_utf8();
     }
     out
 }
@@ -785,8 +915,41 @@ fn direction_mark(direction: Direction) -> char {
 
 // Lay out a reverse-video bar exactly `columns` wide, left text after one space, right text flush
 fn bar(left: &str, right: &str, columns: usize) -> String {
-    let gap = columns.saturating_sub(1 + left.width() + right.width());
+    let gap = columns.saturating_sub(1 + display::width(left) + display::width(right));
     format!("{STATUS_STYLE} {left}{}{right}{SGR_RESET}", " ".repeat(gap))
+}
+
+// Replace untrusted placeholder scalars only while native images are managed
+fn mask_placeholders(text: &str) -> String {
+    text.replace(IMAGE_PLACEHOLDER, &IMAGE_REPLACEMENT.to_string())
+}
+
+fn prepare_interactive(mut rendered: InteractiveRendered) -> InteractiveRendered {
+    if !rendered.images.is_empty() {
+        rendered.document.text = mask_placeholders(&rendered.document.text);
+        for link in &mut rendered.document.links {
+            link.label = mask_placeholders(&link.label);
+        }
+        for heading in &mut rendered.document.headings {
+            heading.text = mask_placeholders(&heading.text);
+        }
+    }
+    rendered
+}
+
+fn native_images(images: Vec<RenderedImage>) -> Vec<graphics::Image> {
+    images
+        .into_iter()
+        .map(|image| graphics::Image {
+            line: image.line,
+            column: image.column,
+            columns: image.columns,
+            rows: image.rows,
+            width: image.raster.width,
+            height: image.raster.height,
+            pixels: image.raster.pixels.clone(),
+        })
+        .collect()
 }
 
 // Raw-mode, alternate-screen session on the controlling terminal, undone on drop
@@ -794,6 +957,8 @@ pub struct Session {
     tty: File,
     original: libc::termios,
     hyperlinks: bool,
+    mouse: bool,
+    images: Vec<u32>,
 }
 
 impl Session {
@@ -809,59 +974,111 @@ impl Session {
         raw.c_cc[libc::VTIME] = 0;
         set_mode(fd, &raw)?;
         if let Ok(mut active) = ACTIVE_MODE.lock() {
-            *active = Some((fd, original, false));
+            *active = Some(ActiveMode {
+                fd,
+                original,
+                hyperlinks: false,
+                mouse: false,
+                images: Vec::new(),
+            });
         }
         install_panic_hook();
         let mut session = Session {
             tty,
             original,
             hyperlinks: false,
+            mouse: false,
+            images: Vec::new(),
         };
         session.tty.write_all(SCREEN_ENTER.as_bytes())?;
         Ok(session)
     }
 
-    // Page through `text` until the reader quits; `relayout` re-renders for a new column count
+    // Own the document, mouse mode and image resources until the reader quits
     pub fn run(
         mut self,
         title: &str,
-        rendered: Rendered,
-        relayout: &mut dyn FnMut(usize) -> Option<Rendered>,
+        rendered: InteractiveRendered,
+        relayout: &mut dyn FnMut(Size) -> Option<InteractiveRendered>,
     ) -> io::Result<()> {
         let resize = ResizeSignal::install()?;
         let mut size = self.size();
-        self.track_links(&rendered);
-        let mut pager = Pager::new(title, rendered, body_rows(size));
+        let InteractiveRendered {
+            document,
+            link_regions,
+            images,
+        } = prepare_interactive(relayout(size).unwrap_or(rendered));
+        self.track_links(&document);
+        let managed_images = !images.is_empty();
+        let mut graphics = graphics::Manager::new(native_images(images));
+        let mut pager = Pager::new(title, document, body_rows(size));
         pager.columns = size.columns;
+        pager.regions = link_regions;
+        pager.managed_images = managed_images;
         let mut frame = String::new();
         let mut keys = [0; KEY_BUFFER_SIZE];
         let mut decoder = Decoder::new();
         let mut input_deadline = None;
         let mut clear = false;
         loop {
+            self.track_mouse(!pager.link_order.is_empty() && !pager.regions.is_empty())?;
             pager.draw(&mut frame, size.columns, clear);
+            let overlay = graphics.frame(
+                graphics::Viewport {
+                    top: pager.view.top,
+                    left: pager.left,
+                    columns: size.columns,
+                    rows: size.rows.saturating_sub(1),
+                },
+                pager.outline.is_none(),
+                Instant::now(),
+            );
+            if !overlay.is_empty() {
+                frame.truncate(frame.len() - SYNC_END.len());
+                frame.push_str(&overlay);
+                // Under the outline only deletions are queued, and its own bar stays in place
+                if pager.outline.is_none() {
+                    frame.push_str(&format!("\x1b[{};1H", size.rows.max(1)));
+                    frame.push_str(&mask_placeholders(&pager.status_line(size.columns)));
+                }
+                frame.push_str(SYNC_END);
+            }
+            self.track_images(graphics.owned_ids());
             self.tty.write_all(frame.as_bytes())?;
+            self.tty.flush()?;
+            graphics.written();
+            self.track_images(graphics.owned_ids());
             clear = false;
 
-            let (input_ready, resized) = wait_for_input(
-                self.tty.as_raw_fd(),
-                resize.read.as_raw_fd(),
-                input_deadline,
-            )?;
+            let deadline = [input_deadline, graphics.deadline()]
+                .into_iter()
+                .flatten()
+                .min();
+            let (input_ready, resized) =
+                wait_for_input(self.tty.as_raw_fd(), resize.read.as_raw_fd(), deadline)?;
             if resized {
                 resize.drain();
                 size = self.size();
                 pager.columns = size.columns;
-                let rendered = relayout(size.columns);
-                if let Some(rendered) = &rendered {
-                    self.track_links(rendered);
+                if let Some(rendered) = relayout(size) {
+                    let InteractiveRendered {
+                        document,
+                        link_regions,
+                        images,
+                    } = prepare_interactive(rendered);
+                    self.track_links(&document);
+                    pager.relayout(Some(document), body_rows(size));
+                    pager.regions = link_regions;
+                    pager.managed_images = !images.is_empty();
+                    graphics.reset(native_images(images));
+                } else {
+                    pager.relayout(None, body_rows(size));
                 }
-                pager.relayout(rendered, body_rows(size));
                 clear = true;
             }
             let decoded = if input_ready {
                 let count = match self.tty.read(&mut keys) {
-                    Ok(0) => return Ok(()),
+                    Ok(0) => return self.finish_graphics(&mut graphics),
                     Ok(count) => count,
                     Err(error)
                         if matches!(
@@ -885,8 +1102,18 @@ impl Session {
                 Vec::new()
             };
             for key in decoded {
+                if let Key::Graphics(reply) = key {
+                    graphics.reply(reply.image, reply.placement, reply.ok, Instant::now());
+                    continue;
+                }
+                // The footer is not content, even when the terminal has only one row
+                if matches!(key, Key::Mouse(MouseEvent::LeftPress { row, .. })
+                    if row >= size.rows.saturating_sub(1))
+                {
+                    continue;
+                }
                 if pager.handle(key) {
-                    return Ok(());
+                    return self.finish_graphics(&mut graphics);
                 }
             }
         }
@@ -898,11 +1125,56 @@ impl Session {
         if !self.hyperlinks && rendered.text.contains("\x1b]8;") {
             self.hyperlinks = true;
             if let Ok(mut active) = ACTIVE_MODE.lock()
-                && let Some((_, _, hyperlinks)) = active.as_mut()
+                && let Some(active) = active.as_mut()
             {
-                *hyperlinks = true;
+                active.hyperlinks = true;
             }
         }
+    }
+
+    // Register before enabling; retain cleanup responsibility until disabling succeeds
+    fn track_mouse(&mut self, enabled: bool) -> io::Result<()> {
+        if self.mouse == enabled {
+            return Ok(());
+        }
+        if enabled {
+            self.mouse = true;
+            if let Ok(mut active) = ACTIVE_MODE.lock()
+                && let Some(active) = active.as_mut()
+            {
+                active.mouse = true;
+            }
+            self.tty.write_all(MOUSE_ENTER.as_bytes())?;
+        } else {
+            self.tty.write_all(MOUSE_LEAVE.as_bytes())?;
+            self.mouse = false;
+            if let Ok(mut active) = ACTIVE_MODE.lock()
+                && let Some(active) = active.as_mut()
+            {
+                active.mouse = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn track_images(&mut self, images: Vec<u32>) {
+        self.images = images;
+        if let Ok(mut active) = ACTIVE_MODE.lock()
+            && let Some(active) = active.as_mut()
+        {
+            active.images.clone_from(&self.images);
+        }
+    }
+
+    // Keep deletes registered until the final successful write
+    fn finish_graphics(&mut self, graphics: &mut graphics::Manager) -> io::Result<()> {
+        let cleanup = graphics.cleanup();
+        self.track_images(graphics.owned_ids());
+        self.tty.write_all(cleanup.as_bytes())?;
+        self.tty.flush()?;
+        graphics.written();
+        self.track_images(graphics.owned_ids());
+        Ok(())
     }
 
     // Read the window size from the terminal itself
@@ -917,7 +1189,13 @@ impl Drop for Session {
         if let Ok(mut active) = ACTIVE_MODE.lock() {
             *active = None;
         }
-        restore_terminal(self.tty.as_raw_fd(), &self.original, self.hyperlinks);
+        restore_terminal(&ActiveMode {
+            fd: self.tty.as_raw_fd(),
+            original: self.original,
+            hyperlinks: self.hyperlinks,
+            mouse: self.mouse,
+            images: self.images.clone(),
+        });
     }
 }
 
@@ -1068,15 +1346,29 @@ fn set_mode(fd: RawFd, mode: &libc::termios) -> io::Result<()> {
 }
 
 // Leave the alternate screen and put the line settings back
-fn restore_terminal(fd: RawFd, mode: &libc::termios, hyperlinks: bool) {
-    // SAFETY: the buffer is a static string valid for its full length
-    unsafe {
-        if hyperlinks {
-            libc::write(fd, OSC8_CLOSE.as_ptr().cast(), OSC8_CLOSE.len());
+fn restore_terminal(active: &ActiveMode) {
+    let mut cleanup = String::new();
+    if !active.images.is_empty() {
+        // Close a partial APC before deleting only images this session registered
+        cleanup.push_str("\x1b\\");
+        for image in &active.images {
+            cleanup.push_str(&format!("\x1b_Ga=d,d=I,i={image},q=2;\x1b\\"));
         }
-        libc::write(fd, SCREEN_LEAVE.as_ptr().cast(), SCREEN_LEAVE.len());
     }
-    let _ = set_mode(fd, mode);
+    if active.hyperlinks {
+        cleanup.push_str(OSC8_CLOSE);
+    }
+    if active.mouse {
+        cleanup.push_str(MOUSE_LEAVE);
+    }
+    cleanup.push_str(SGR_RESET);
+    cleanup.push_str(SYNC_END);
+    cleanup.push_str(SCREEN_LEAVE);
+    // SAFETY: cleanup owns its full byte buffer throughout the write
+    unsafe {
+        libc::write(active.fd, cleanup.as_ptr().cast(), cleanup.len());
+    }
+    let _ = set_mode(active.fd, &active.original);
 }
 
 // Restore the terminal as soon as an uncaught panic is reported, before anything else prints
@@ -1084,9 +1376,9 @@ fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Ok(mut active) = ACTIVE_MODE.try_lock()
-            && let Some((fd, mode, hyperlinks)) = active.take()
+            && let Some(active) = active.take()
         {
-            restore_terminal(fd, &mode, hyperlinks);
+            restore_terminal(&active);
         }
         previous(info);
     }));
@@ -1099,18 +1391,21 @@ fn body_rows(size: Size) -> usize {
 
 // Trim text from the left to fit `room` columns, marking the cut with an ellipsis
 fn fit_left(text: &str, room: usize) -> String {
-    if text.width() <= room {
+    if display::width(text) <= room {
         return text.to_owned();
+    }
+    if room == 0 {
+        return String::new();
     }
     let mut kept = 0;
     let mut start = text.len();
-    for (index, ch) in text.char_indices().rev() {
-        let width = ch.width().unwrap_or(0);
+    let units: Vec<_> = display::units(text).collect();
+    for (unit, width) in units.into_iter().rev() {
         if kept + width + 1 > room {
             break;
         }
         kept += width;
-        start = index;
+        start -= unit.len();
     }
     format!("{ELLIPSIS}{}", &text[start..])
 }
@@ -1156,6 +1451,36 @@ mod tests {
         assert_eq!(state, view(25, 100, 20));
         state.resize(100, 90);
         assert_eq!(state.top, 10);
+    }
+
+    #[test]
+    fn clipping_keeps_graphemes_whole_across_styles_and_both_edges() {
+        let line = "A👩\x1b[1m\u{200d}👩\u{200d}👧\u{200d}👦\x1b[0mB全C";
+        assert_eq!(strip_sgr(&cut_window(line, 2, 4)), " B全");
+        assert_eq!(strip_sgr(&cut_window(line, 0, 2)), "A ");
+        assert_eq!(strip_sgr(&cut_window(line, 1, 2)), "👩‍👩‍👧‍👦");
+        assert_eq!(
+            strip_sgr(&cut_window("xe\x1b[1m\u{301}\x1b[0my", 1, 1)),
+            "e\u{301}"
+        );
+        assert_eq!(strip_sgr(&cut_window("xᄀ\x1b[1mᅡ\x1b[0my", 2, 1)), " ");
+    }
+
+    #[test]
+    fn chrome_fitting_does_not_split_emoji_or_combining_units() {
+        assert_eq!(fit_left("abc👩‍👩‍👧‍👦", 3), "…👩‍👩‍👧‍👦");
+        assert_eq!(fit_left("abce\u{301}", 2), "…e\u{301}");
+        assert_eq!(fit_left("abc", 0), "");
+    }
+
+    #[test]
+    fn clearing_a_row_happens_before_its_last_column_is_painted() {
+        let mut state = pager(3, &[], 2);
+        state.columns = 6;
+        let mut frame = String::new();
+        state.draw(&mut frame, 6, false);
+        assert!(frame.contains("\x1b[Kline 0\r\n"));
+        assert!(!frame.contains("line 0\x1b[K"));
     }
 
     #[test]

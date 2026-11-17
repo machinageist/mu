@@ -16,7 +16,8 @@ Built in, so `less` isn't needed. It takes over the screen on the alternate scre
 | `space` `f` `PgDn` `Ctrl-F` / `b` `PgUp` `Ctrl-B` | Scroll one page down / up |
 | `d` `Ctrl-D` / `u` `Ctrl-U` | Scroll half a page down / up |
 | `g` `Home` `<` / `G` `End` `>` | Jump to top / bottom |
-| Mouse wheel | Scroll. It's sent as arrow keys, so text selection still works |
+| Mouse wheel | Scroll; internal-link books use mouse reports, other documents use alternate-scroll arrow keys |
+| Left-click | Follow an internal EPUB link under its painted label |
 | `/` / `?` | Search forward / backward. See [Search](#search) |
 | `n` / `N` | Next / previous match, wrapping round the ends |
 | `Esc` | Clear the search highlighting |
@@ -71,12 +72,13 @@ It works for every document format. `mu --toc FILE` prints the same list without
 
 ## EPUB chapter links {#chapter-links}
 
-Internal EPUB links navigate inside the book with the keyboard, independently of external terminal hyperlinks:
+Internal EPUB links navigate inside the book with the keyboard or a plain left-click, independently of external terminal hyperlinks:
 
 - `Tab` selects the next resolvable internal link and `Shift-Tab` the previous one, cycling in rendered reading order (line, then display column). The link is scrolled into view vertically and horizontally, and the status bar shows its label with `Enter follow`.
 - Entering selection starts with the first visible source for `Tab`, or the last visible source for `Shift-Tab`, including the current horizontal window. If no source position is visible, selection continues in the requested reading direction and wraps around the book.
 - The selected source's first rendered word is emphasized and the status bar includes `[position/total]`, so identical footnote labels can be distinguished. Invisible zero-width-only prefixes are skipped when choosing the focus word. Focus styling does not alter the document text and works with document color disabled; very narrow windows retain the label and ordinal before the key hint.
 - `Enter` follows the selected link to its rendered destination line and display column, clamped at the last full page near the end. With no link selected, `Enter` still scrolls one line down.
+- A plain left-button press follows any visible cell of the link's complete label, including later wrapped lines, inline styles and table cells. Gutters, borders, cell padding, the status bar and the blanked half of a clipped wide glyph are not link cells. Mouse releases and drag/motion reports do not follow links.
 - `Backspace` returns to the view saved when following a link. In a search prompt it retains its query-editing behavior.
 - Relative chapter paths resolve within readable chapters in the EPUB spine. A fragment-only link stays in its own chapter, and identical IDs in different chapters cannot collide. A path without a fragment targets the chapter's start.
 - XHTML named/numeric references and equivalent Unicode/URI-encoded IDs resolve consistently without DTD fetching or recursive decoding. Empty page-break markers and table groups point to the next visible content in the chapter, never backward to preceding text or a border.
@@ -84,14 +86,14 @@ Internal EPUB links navigate inside the book with the keyboard, independently of
 - Destinations use actual output lines and display columns, refreshed when the document reflows. Reflow clears the active selection; select again with `Tab` or `Shift-Tab`. Return positions are adjusted where the source link still matches, even when table wrapping changes the displayed order of links.
 - This works with `--links never`, `--color never` and `NO_COLOR`. No OSC 8 support is needed. For a short book, use `--paging always` to open the pager.
 
-These are in-pager keyboard jumps, not terminal-emulator mouse-click navigation. mu does not invent file URIs for ZIP members, invoke an external opener or make network requests to follow them. External HTTP(S)/mailto links instead follow [the OSC 8 policy](/wiki/usage#links), with activation left to the emulator.
+These are in-pager jumps. mu does not invent file URIs for ZIP members, invoke an external opener or make network requests to follow them. External HTTP(S)/mailto links instead follow [the OSC 8 policy](/wiki/usage#links), with activation left to the emulator. Mouse press reporting is enabled only while a paged book has resolvable internal links; use the emulator's mouse-reporting bypass gesture (commonly Shift-drag) to select text. Ordinary documents retain terminal-managed selection.
 
 ## Sideways {#sideways}
 
 Lines wider than the window, such as a wide [CSV table](/wiki/formats#tables), run past the right edge. `l` or `→` scrolls right and `h` or `←` scrolls left, by half the window width each time. Added in 0.6.0.
 
 - Scrolling stops when the end of the widest line reaches the right edge.
-- Lines are cut by display column, keeping their colors and OSC 8 destinations on the visible label. Hyperlink controls have zero width, and padding and borders are not linked. A wide character such as a CJK glyph that's cut in half shows as spaces.
+- Lines are cut by display column, keeping their colors and OSC 8 destinations on the visible label. Hyperlink controls have zero width, and padding and borders are not linked. Clipping never splits a Unicode grapheme, including combining marks and joined emoji: a partially visible wide unit becomes spaces at either edge.
 - While scrolled, the status bar shows the first visible column:
 
 ```term
@@ -112,7 +114,7 @@ Books with resolvable internal links also show `Tab links` when space permits. S
 
 ## Resizing {#resize}
 
-Resizing the window re-renders the document at the new width and keeps your place proportionally. With `-w`, the layout stays fixed and only the window changes. A search runs again over the new layout, an open outline stays open with its selection in view, and EPUB navigation metadata is refreshed after reflow.
+Resizing the window re-renders the document at the new width and keeps your place proportionally. With `-w`, text width stays fixed, but images still refit when height or cell-pixel geometry changes. A search runs again over the new layout, an open outline stays open with its selection in view, and EPUB navigation metadata is refreshed after reflow. Supported direct Kitty/Ghostty terminals keep high-resolution [images](/wiki/images#protocols) aligned while scrolling, clipping, reflowing and opening the outline; other environments retain half blocks.
 
 ## Terminal handling {#pager-internals}
 
@@ -121,6 +123,6 @@ Resizing the window re-renders the document at the new width and keeps your plac
 - The wait uses `select()`, not `poll()`, because macOS `poll()` rejects `/dev/tty`. Before 0.5.0 a resize on macOS only showed after the next key press.
 - Synchronized-output frames to avoid flicker.
 - Generated OSC 8 state is balanced across wrapping, highlighting and clipping, and closed before status bars and pager exit; `--links never` emits no OSC 8 cleanup sequence either.
-- Key decoding covers letters, control keys, UTF-8 and CSI escape sequences. Partial input is buffered across terminal reads with a bounded size and a short deadline, so fragmented Shift-Tab and UTF-8 are not lost while a lone Escape remains responsive. It's unit-tested along with scrolling, search, the outline, resize and the status bar, and `tests/pager_pty.rs` drives the real pager in a pseudo-terminal.
+- Key decoding covers letters, control keys, UTF-8, CSI, SGR/legacy mouse reports and Kitty graphics replies. Partial input has bounded buffering and a short deadline; malformed or oversized protocol packets cannot leak their payload into pager commands. Mouse reporting and owned graphics resources are cleaned up on exit, error and panic. Unit tests cover decoding and graphics lifecycle, and `tests/pager_pty.rs` drives the real pager in a pseudo-terminal.
 
 The loop is drawn as [logic map 6](/wiki/logic-maps#map-6).

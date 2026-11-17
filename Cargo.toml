@@ -9,6 +9,7 @@ repository = "https://github.com/machinageist/mu"
 [dependencies]
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 unicode-width = "0.2"
+unicode-segmentation = "1.13"
 libc = "0.2"
 png = "0.18.1"
 gif = "0.14.2"

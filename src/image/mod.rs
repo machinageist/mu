@@ -150,6 +150,32 @@ pub(crate) fn draw_guarded(
     guarded(|| draw(picture, max_cols, options)).unwrap_or_default()
 }
 
+// Capture real cell-pixel resolution without encoding terminal controls. Check all
+// dimensions and the remaining layout budget before resizing or rasterising.
+pub(crate) fn capture_guarded(
+    picture: &Picture,
+    max_cols: usize,
+    options: &ImageOptions,
+    remaining: usize,
+) -> Option<(Rgba, usize, usize)> {
+    let (cols, rows) = encode::fit(picture.size(), max_cols, options.max_rows, options.cell)?;
+    let width = u32::try_from(cols).ok()?.checked_mul(options.cell.width)?;
+    let height = u32::try_from(rows).ok()?.checked_mul(options.cell.height)?;
+    if !within_limits(width, height) {
+        return None;
+    }
+    let bytes = usize::try_from(u64::from(width) * u64::from(height) * 4).ok()?;
+    if bytes > remaining {
+        return None;
+    }
+    let raster = guarded(|| match picture {
+        Picture::Raster(image) if image.is_valid() => Some(encode::resize(image, width, height)),
+        Picture::Raster(_) => None,
+        Picture::Vector(svg) => svg.rasterize(width, height),
+    })??;
+    raster.is_valid().then_some((raster, cols, rows))
+}
+
 // Run third-party decoding code, turning a panic into None without printing it
 // Notes: the panic hook is swapped for a silent one meanwhile, so a caught panic neither
 // writes over the page nor fires the pager's restore-the-terminal hook; mu is single-threaded
@@ -213,5 +239,34 @@ mod tests {
         assert_eq!(guarded(|| 7), Some(7));
         // The normal hook is back afterwards
         assert_eq!(guarded(|| 8), Some(8));
+    }
+
+    #[test]
+    fn capture_validates_dimensions_buffers_and_budget_before_resampling() {
+        let options = ImageOptions {
+            mode: ImageMode::Auto,
+            ..Default::default()
+        };
+        let valid = Picture::Raster(Rgba {
+            width: 8,
+            height: 16,
+            pixels: vec![128; 8 * 16 * 4],
+        });
+        assert!(capture_guarded(&valid, 80, &options, 8 * 16 * 4).is_some());
+        assert!(capture_guarded(&valid, 80, &options, 8 * 16 * 4 - 1).is_none());
+        let short = Picture::Raster(Rgba {
+            width: 8,
+            height: 16,
+            pixels: vec![128; 3],
+        });
+        assert!(capture_guarded(&short, 80, &options, usize::MAX).is_none());
+        let oversized = ImageOptions {
+            cell: CellSize {
+                width: u32::MAX,
+                height: u32::MAX,
+            },
+            ..options
+        };
+        assert!(capture_guarded(&valid, 80, &oversized, usize::MAX).is_none());
     }
 }

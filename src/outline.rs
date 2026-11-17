@@ -3,8 +3,7 @@
 // Description: A document's outline: its headings, indented by level and cut to the width
 // Notes: Shared by `--toc` and the pager's outline overlay
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
+use crate::display;
 use crate::render::{Heading, Options};
 use crate::style::{STYLE_HEADINGS, paint};
 
@@ -47,18 +46,20 @@ pub fn outline(headings: &[Heading], options: &Options) -> String {
 
 // Cut text to `room` columns, marking the cut with an ellipsis
 fn fit_right(text: &str, room: usize) -> String {
-    if text.width() <= room {
+    if room == 0 {
+        return String::new();
+    }
+    if display::width(text) <= room {
         return text.to_owned();
     }
     let mut out = String::new();
     let mut used = 0;
-    for ch in text.chars() {
-        let width = ch.width().unwrap_or(0);
+    for (unit, width) in display::units(text) {
         if used + width + 1 > room {
             break;
         }
         used += width;
-        out.push(ch);
+        out.push_str(unit);
     }
     // Never leave a space hanging before the ellipsis
     let mut out = out.trim_end().to_owned();
@@ -90,7 +91,7 @@ mod tests {
         let headings = [heading(1, "Top"), heading(2, "A rather long 見出し")];
         let entries = outline_entries(&headings, 12);
         assert_eq!(entries[1], "  A rather…");
-        assert!(entries.iter().all(|entry| entry.width() <= 12));
+        assert!(entries.iter().all(|entry| display::width(entry) <= 12));
     }
 
     #[test]
@@ -100,5 +101,14 @@ mod tests {
         assert!(text.starts_with('\x1b'));
         assert!(text.contains("  \x1b"));
         assert_eq!(outline(&[], &options), "");
+    }
+
+    #[test]
+    fn clipping_uses_indivisible_graphemes_even_at_zero_width() {
+        let headings = [heading(1, "é👩‍💻中🇺🇸XYZ")];
+        assert_eq!(outline_entries(&headings, 0), [""]);
+        assert_eq!(outline_entries(&headings, 3), ["é…"]);
+        assert_eq!(outline_entries(&headings, 4), ["é👩‍💻…"]);
+        assert_eq!(outline_entries(&headings, 6), ["é👩‍💻中…"]);
     }
 }

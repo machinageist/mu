@@ -100,7 +100,8 @@ Built in, no `less` needed. It takes over the screen (alternate screen, so your 
 | `space` `f` `PgDn` `Ctrl-F` / `b` `PgUp` `Ctrl-B` | Scroll one page down / up |
 | `d` `Ctrl-D` / `u` `Ctrl-U` | Scroll half a page down / up |
 | `g` `Home` `<` / `G` `End` `>` | Jump to top / bottom |
-| Mouse wheel | Scroll (sent as arrow keys, so text selection still works) |
+| Mouse wheel | Scroll; ordinary documents retain terminal-managed selection |
+| Left-click | Follow an internal EPUB link under its painted label |
 | `/` / `?` | Search forward / backward. Type the text, `Enter` to search, `Esc` to cancel. An empty search repeats the last one |
 | `n` / `N` | Next / previous match, wrapping round the ends |
 | `Esc` | Clear search highlighting |
@@ -114,7 +115,7 @@ Built in, no `less` needed. It takes over the screen (alternate screen, so your 
 
 **Outline** works for every document format, and opens on the heading of the section you are reading. `mu --toc FILE` prints the same outline without paging.
 
-**EPUB chapter navigation** cycles through resolvable internal links in document order, scrolling the selected link into view vertically and horizontally and showing its label with `Enter follow` in the status bar. Relative chapter paths resolve within the book; fragments are scoped to their chapter, so repeated IDs in different chapters do not collide. Destinations use rendered output lines and display columns and are recomputed on reflow. Missing chapters, missing or hidden fragments and other unresolved targets stay readable but are not jumpable. These are keyboard jumps inside mu, not terminal-emulator mouse clicks or invented file URIs for ZIP members; they use no external opener or network access.
+**EPUB chapter navigation** cycles through resolvable internal links in document order, scrolling the selected link into view vertically and horizontally and showing its label with `Enter follow` in the status bar. A plain left press anywhere on a visible label follows it too, including wrapped/styled labels and table cells; gutters, borders, padding and the status bar are not clickable. Mouse reporting is scoped to internal-link books; use the terminal's bypass gesture (commonly Shift-drag) to select text there. Relative chapter paths and fragments are chapter-scoped and refreshed on reflow. Unresolved targets stay readable without jumping elsewhere. These are internal jumps, not invented ZIP-member file URIs; they use no external opener or network access.
 
 The bottom row shows the file name, the visible line range, how far through you are, and the key hints. Resizing the window re-renders the document at the new width and keeps your place proportionally; with `-w` the layout stays fixed and only the window changes. Lines wider than the window are clipped rather than wrapped.
 
@@ -155,11 +156,11 @@ Detection from content is deliberately conservative: when in doubt it picks Mark
 An image that stands alone in its paragraph or block is drawn as a picture, with its alt text as a dim caption: HTML `<img>` and `<figure>`, Markdown `![alt](src)` on its own line, RST `.. image::`, AsciiDoc `image::` and Org `[[file.png]]`. An image inside running text stays `[image: alt]`, since a picture cannot sit inside a wrapped line.
 
 - **Aspect ratio:** mu reads the terminal's cell size in pixels and scales the image by one factor so it fits the text width and the screen height. Width and height shrink together, so the aspect ratio is exact to within half a cell. Images are never enlarged past their natural size. When a terminal does not report pixel sizes, mu assumes the common 1:2 cell.
-- **Drawing:** printed straight to kitty or Ghostty, the Kitty graphics protocol is used; in iTerm2 or WezTerm, iTerm2 inline images. Everywhere else, inside the pager and under tmux, images are drawn with 24-bit-color `▀` half blocks.
+- **Drawing:** direct kitty and Ghostty terminals use pixel-resolution Kitty graphics, including acknowledged, clipped virtual placements in the pager. Redraws reuse uploads; outlines hide images and full-geometry resizing refits them. Unsupported/rejected graphics and multiplexers keep the 24-bit-color `▀` half-block fallback. iTerm2/WezTerm inline images remain straight-output only.
 - **Formats:** PNG, JPEG, GIF (first frame), WebP and SVG. SVG text is not rendered, and SVGs cannot load external files or URLs.
 - **Sources:** local paths, relative to the input file (or `--base`, which piped input needs), and `data:` URIs. Remote `http(s)` images load only with `--images fetch`, which is the default when the input itself is a URL, through the system `curl` with a 10 s timeout and a 20 MB cap. A local file cannot make mu touch the network unless you ask.
 - **Fallback:** with `--images never`, color off, or anything that fails to load or decode, the `[image: alt]` text is shown as before.
-- **Limits:** sources over 20 MB, images over 64 megapixels or 16384 pixels on a side are refused before decoding.
+- **Limits:** sources over 20 MB, images over 64 megapixels or 16384 pixels on a side are refused before decoding. Interactive pixel assets and the native cache each cap RGBA at 32 MiB; at most eight native images are live, with owned-ID cleanup and fallback for excess images.
 
 ## What renders
 
@@ -234,6 +235,8 @@ cargo run --release -- -w 60 tests/fixtures/kitchen-sink.md
 `tests/render.rs` and one test file per format (`tests/html.rs`, `tests/json.rs`, …) have exact-output cases for each construct plus invariants swept across widths 30–120: no line exceeds the width, color output with SGR stripped equals plain output at a fixed hyperlink policy, every styled line resets before its newline, and no control character from the input reaches the output. Hyperlink regressions exercise the public rendering API, CLI environment policy and real pager in a pseudo-terminal; EPUB cases extract actual ZIP books and check chapter-scoped destinations. `src/pager/` unit-tests key decoding, scrolling, search, the outline, chapter jumps, resize behaviour and the status bar, and `tests/pager_pty.rs` drives resizing, search, outlines, sideways scrolling and internal navigation. These tests verify emitted bytes and pager behavior, not a desktop emulator's click gesture. `tests/sniff.rs` sniffs every fixture against every format so one format's rule cannot quietly claim another's files.
 
 The library does not inspect terminal environment variables: `Options.links: bool` is explicit and defaults to `false`, including in `Options::new(width, color)`. `render` and `present` return text; `present_outlined` returns `Rendered { text, headings, anchors, links }`, including `Anchor { id, line, column }` and `NavigationLink { target, label, line, column }` for EPUB's internal navigation. Positions use zero-based rendered output lines and terminal display columns; external OSC 8 destinations are not pager navigation links. For a binary EPUB, call `extract(bytes, Format::Epub)` before `present_outlined` with `Format::Epub`.
+
+`present_interactive` adds an `InteractiveRendered { document, link_regions, images }` sidecar without changing existing struct fields. Link regions contain half-open display-cell spans for complete labels; optional validated pixel assets remain separate from legacy fallback text. `mu::display` exposes the extended-grapheme, non-CJK cell model shared by layout and hit testing.
 
 ## Versioning
 
