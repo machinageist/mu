@@ -2,18 +2,22 @@
 title: Changelog
 group: Project
 order: 2
-summary: Every release from 0.1.0 to 0.9.0, and what's unreleased
+summary: Every release from 0.1.0 to 0.9.1, and what's unreleased
 ---
 
 Every notable change, following [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Mirrors `CHANGELOG.md`.
 
 ## Unreleased {#unreleased}
 
-Changes since 0.9.0, not yet in a release.
+Changes since 0.9.1, not yet in a release.
 
 ### Added {#unreleased-added}
 
 ### Fixed {#unreleased-fixed}
+
+## 0.9.1 · 2026-11-16 {#v0-9-1}
+
+### Fixed {#v0-9-1-fixed}
 
 - Internal EPUB links respond to a plain left-click on their visible label, including styled, wrapped and table labels. Mouse reporting is scoped to books with resolvable links; Backspace restores the departure view, and terminal-managed gestures remain separate
 - Book covers and other standalone images retain pixel detail in the pager on direct Kitty/Ghostty terminals, with acknowledged virtual placements, clipped redraws, bounded resource reuse and owned cleanup. Unsupported or rejected graphics fall back to the existing half-block image

@@ -4,6 +4,8 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+## 0.9.1 - 2026-11-16
+
 ### Fixed
 - Internal EPUB links respond to a plain left-click on their visible label, including styled, wrapped and table labels. Mouse reporting is scoped to books with resolvable links; Backspace restores the departure view, and terminal-managed gestures remain separate
 - Book covers and other standalone images retain pixel detail in the pager on direct Kitty/Ghostty terminals, with acknowledged virtual placements, clipped redraws, bounded resource reuse and owned cleanup. Unsupported or rejected graphics fall back to the existing half-block image
