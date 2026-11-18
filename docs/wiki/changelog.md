@@ -2,18 +2,22 @@
 title: Changelog
 group: Project
 order: 2
-summary: Every release from 0.1.0 to 0.9.1, and what's unreleased
+summary: Every release from 0.1.0 to 0.9.2, and what's unreleased
 ---
 
 Every notable change, following [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Mirrors `CHANGELOG.md`.
 
 ## Unreleased {#unreleased}
 
-Changes since 0.9.1, not yet in a release.
+Changes since 0.9.2, not yet in a release.
 
 ### Added {#unreleased-added}
 
 ### Fixed {#unreleased-fixed}
+
+## 0.9.2 · 2026-11-18 {#v0-9-2}
+
+### Fixed {#v0-9-2-fixed}
 
 - Ordered-list item text and wrapped lines stay aligned when numbering crosses a digit boundary
 
