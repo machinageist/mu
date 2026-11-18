@@ -43,6 +43,7 @@ Document formats share one layout engine. Each one gets the same headings, lists
 - Lexers use per-language block-comment nesting and hash-comment boundaries; quoted strings in preprocessor directives do not start comments. Known prefixed constants, such as PowerShell booleans and Scheme `#t`/`#f`, retain the constant style without consuming longer variable or identifier names.
 - HTML and EPUB code blocks accept `language-`/`lang-` classes and `data-language`/`data-lang` hints on block ancestors, `pre`, or nested `code`; bare known language classes work on `pre` and `code`. A nested `code` hint takes precedence over its surrounding blocks. AsciiDoc source languages accept paired quotes and existing attribute substitutions.
 - HTML headings omit decorative fragment permalink icons and URLs; meaningful fragment-linked labels retain their inline formatting. External heading links and ordinary paragraph links follow the hyperlink policy below, retaining printed destinations when OSC 8 is disabled or the target is ineligible. Missing or mismatched heading tags recover locally, and hidden content does not suppress the document-title fallback.
+- Ordered-list markers use the width of the widest number in each list, keeping item text and wrapped lines aligned across digit boundaries.
 
 Tables (CSV and TSV) go through the same table engine as Markdown tables:
 - The first record is the header, and numeric columns are right-aligned.

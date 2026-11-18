@@ -4,7 +4,7 @@
 // Notes: Quotes, list items and footnotes are containers that add a gutter to every line they hold;
 // inline content is buffered per block, wrapped once, then written behind those gutters
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use pulldown_cmark::{
@@ -118,7 +118,14 @@ struct Container {
 
 struct List {
     next: Option<u64>,
+    // Columns for the widest number in this list, so every item's text starts together
+    digits: usize,
     loose: bool,
+}
+
+struct HeldList {
+    digits_slot: Option<usize>,
+    next: u64,
 }
 
 enum RawKind {
@@ -286,6 +293,8 @@ struct Renderer<'o> {
     inline_open: bool,
     containers: Vec<Container>,
     lists: Vec<List>,
+    // Widest-number column counts for ordered lists, in the order they start
+    list_digits: VecDeque<usize>,
     pending_blank: bool,
     heading: usize,
     raw: Option<Raw>,
@@ -335,9 +344,7 @@ pub(crate) fn render_events<'a>(
     capacity: usize,
 ) -> Rendered {
     let mut renderer = Renderer::new(options, capacity);
-    for event in events {
-        renderer.event(event);
-    }
+    feed(&mut renderer, events.into_iter().map(DocumentEvent::Markup));
     renderer.finish()
 }
 
@@ -349,13 +356,7 @@ pub(crate) fn render_annotated_events<'a>(
 ) -> Rendered {
     let mut renderer = Renderer::new(options, capacity);
     renderer.navigation = true;
-    for event in events {
-        match event {
-            DocumentEvent::Markup(event) => renderer.event(event),
-            DocumentEvent::Anchor(id) => renderer.anchor(id),
-            DocumentEvent::ChapterStart | DocumentEvent::ChapterEnd => renderer.chapter_boundary(),
-        }
-    }
+    feed(&mut renderer, events);
     renderer.finish()
 }
 
@@ -369,13 +370,7 @@ pub(crate) fn render_interactive_events<'a>(
     let mut renderer = Renderer::new(options, capacity);
     renderer.navigation = navigation;
     renderer.interactive = true;
-    for event in events {
-        match event {
-            DocumentEvent::Markup(event) => renderer.event(event),
-            DocumentEvent::Anchor(id) => renderer.anchor(id),
-            DocumentEvent::ChapterStart | DocumentEvent::ChapterEnd => renderer.chapter_boundary(),
-        }
-    }
+    feed(&mut renderer, events);
     renderer.finish_interactive()
 }
 
@@ -409,10 +404,73 @@ pub(crate) fn render_table_events<'a>(
 ) -> Rendered {
     let mut renderer = Renderer::new(options, capacity);
     renderer.table_min_column = min_column;
-    for event in events {
-        renderer.event(event);
-    }
+    feed(&mut renderer, events.into_iter().map(DocumentEvent::Markup));
     renderer.finish()
+}
+
+// Hold each outermost ordered list until it ends, so every item can pad its number to the
+// widest in its list; everything else goes straight to the renderer
+fn feed<'a>(renderer: &mut Renderer, events: impl IntoIterator<Item = DocumentEvent<'a>>) {
+    let mut held = Vec::new();
+    let mut open: Vec<HeldList> = Vec::new();
+    let mut digits = Vec::new();
+    for event in events {
+        let ordered_start = matches!(
+            event,
+            DocumentEvent::Markup(Event::Start(Tag::List(Some(_))))
+        );
+        if held.is_empty() && !ordered_start {
+            renderer.document_event(event);
+            continue;
+        }
+        match &event {
+            DocumentEvent::Markup(Event::Start(Tag::List(start))) => {
+                let digits_slot = start.map(|first| {
+                    digits.push(digit_count(first));
+                    digits.len() - 1
+                });
+                open.push(HeldList {
+                    digits_slot,
+                    next: start.unwrap_or(0),
+                });
+            }
+            DocumentEvent::Markup(Event::Start(Tag::Item)) => {
+                if let Some(list) = open.last_mut()
+                    && let Some(slot) = list.digits_slot
+                {
+                    digits[slot] = digit_count(list.next);
+                    list.next = list.next.saturating_add(1);
+                }
+            }
+            DocumentEvent::Markup(Event::End(TagEnd::List(_))) => {
+                open.pop();
+            }
+            _ => {}
+        }
+        held.push(event);
+        if open.is_empty() {
+            release(renderer, &mut held, &mut digits);
+        }
+    }
+    // A list the source never closed still renders
+    release(renderer, &mut held, &mut digits);
+}
+
+// Hand held events and their lists' number widths to the renderer
+fn release<'a>(
+    renderer: &mut Renderer,
+    held: &mut Vec<DocumentEvent<'a>>,
+    digits: &mut Vec<usize>,
+) {
+    renderer.list_digits.extend(digits.drain(..));
+    for event in held.drain(..) {
+        renderer.document_event(event);
+    }
+}
+
+// Count the decimal digits of a list number
+fn digit_count(number: u64) -> usize {
+    number.checked_ilog10().map_or(1, |log| log as usize + 1)
 }
 
 // Pick the Markdown extensions to enable for this document
@@ -578,6 +636,7 @@ impl<'o> Renderer<'o> {
             inline_open: false,
             containers: Vec::new(),
             lists: Vec::new(),
+            list_digits: VecDeque::new(),
             pending_blank: false,
             heading: 0,
             raw: None,
@@ -658,6 +717,15 @@ impl<'o> Renderer<'o> {
     }
 
     // Dispatch one parser event
+    // Route one document event, markup or navigation, to its handler
+    fn document_event(&mut self, event: DocumentEvent) {
+        match event {
+            DocumentEvent::Markup(event) => self.event(event),
+            DocumentEvent::Anchor(id) => self.anchor(id),
+            DocumentEvent::ChapterStart | DocumentEvent::ChapterEnd => self.chapter_boundary(),
+        }
+    }
+
     fn event(&mut self, event: Event) {
         match event {
             Event::Start(tag) => self.start(tag),
@@ -733,8 +801,13 @@ impl<'o> Renderer<'o> {
             }
             Tag::List(start) => {
                 self.begin_block();
+                let digits = match start {
+                    Some(_) => self.list_digits.pop_front().unwrap_or(0),
+                    None => 0,
+                };
                 self.lists.push(List {
                     next: start,
+                    digits,
                     loose: false,
                 });
             }
@@ -1028,13 +1101,16 @@ impl<'o> Renderer<'o> {
         let (marker, loose) = match self.lists.last_mut() {
             Some(List {
                 next: Some(number),
+                digits,
                 loose,
             }) => {
-                let marker = format!("{number}.");
-                *number += 1;
+                let marker = format!("{number:>digits$}.", digits = *digits);
+                *number = number.saturating_add(1);
                 (marker, *loose)
             }
-            Some(List { next: None, loose }) => (BULLETS[depth % BULLETS.len()].to_owned(), *loose),
+            Some(List {
+                next: None, loose, ..
+            }) => (BULLETS[depth % BULLETS.len()].to_owned(), *loose),
             None => (BULLETS[0].to_owned(), false),
         };
         // Tight lists never separate items, even after a nested block

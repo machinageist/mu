@@ -248,3 +248,35 @@ fn every_styled_line_is_reset_before_its_newline() {
         }
     }
 }
+
+#[test]
+fn ordered_list_text_aligns_when_numbers_reach_two_digits() {
+    let source: String = (1..=10)
+        .map(|n| format!("{n}. item {n} has text that wraps\n"))
+        .collect();
+    let out = plain(&source, 20);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], " 1. item 1 has text");
+    assert_eq!(lines[1], "    that wraps");
+    assert_eq!(lines[16], " 9. item 9 has text");
+    assert_eq!(lines[18], "10. item 10 has text");
+    assert_eq!(lines[19], "    that wraps");
+}
+
+#[test]
+fn ordered_list_padding_follows_its_start_and_nesting() {
+    assert_eq!(plain("8. a\n9. b\n10. c\n", 30), " 8. a\n 9. b\n10. c\n");
+    assert_eq!(
+        plain("- outer\n  1. a\n  2. b\n- next\n", 30),
+        "• outer\n  1. a\n  2. b\n• next\n"
+    );
+    let nested: String = (1..=10).map(|n| format!("   {n}. inner\n")).collect();
+    let out = plain(&format!("1. outer\n{nested}2. last\n"), 30);
+    assert!(out.starts_with("1. outer\n    1. inner\n"), "{out:?}");
+    assert!(out.contains("   10. inner\n2. last\n"), "{out:?}");
+}
+
+#[test]
+fn ordered_lists_under_ten_items_are_unchanged() {
+    assert_eq!(plain("1. x\n2. y", 30), "1. x\n2. y\n");
+}

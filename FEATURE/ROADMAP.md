@@ -81,5 +81,4 @@ Every key above becomes part of the 1.0 promise, so the 1.0 release candidates r
 
 ## Small debts to fold in along the way
 
-- In ordered lists that reach 10 items, items 10 and above indent their wrapped lines one column further than items 1–9
 - The README gives the binary size as about 2.0 MB, which is out of date. Measure it again each release, and set a size budget in 0.11.0 once release binaries exist

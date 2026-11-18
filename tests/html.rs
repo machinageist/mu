@@ -353,3 +353,19 @@ fn templates_inside_head_cannot_expose_hidden_headings() {
         assert_invariants(input, Format::Html);
     }
 }
+
+#[test]
+fn ordered_list_numbers_right_align_past_nine() {
+    assert_eq!(
+        html("<ol start=\"9\"><li>a</li><li>b</li></ol>"),
+        " 9. a\n10. b\n"
+    );
+}
+
+#[test]
+fn ordered_list_start_at_u64_max_does_not_overflow() {
+    assert_eq!(
+        html("<ol start=\"18446744073709551615\"><li>a</li><li>b</li></ol>"),
+        "18446744073709551615. a\n18446744073709551615. b\n"
+    );
+}

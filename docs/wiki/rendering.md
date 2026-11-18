@@ -17,7 +17,7 @@ The Markdown mapping is the reference. The other document formats map their equi
 | `` `code` `` | Yellow |
 | `[text](url)` | Underlined blue text when color is on; an OSC 8 label when enabled and valid, otherwise the URL dimmed in parentheses. Autolinks are not repeated |
 | `![alt](src)` | A drawn picture when it stands alone, else `[image: alt]`. See [Images](/wiki/images) |
-| Lists | `•` `◦` `▪` by depth, numbers for ordered lists. Wrapped lines align under the text, and tight lists stay tight |
+| Lists | `•` `◦` `▪` by depth; ordered numbers align to the widest marker in their list. Wrapped lines align under the text, and tight lists stay tight |
 | `- [ ]` / `- [x]` | `☐` / `☑` in place of the bullet |
 | `> quote` | `│` bar, kept through blank lines and nesting |
 | `> [!NOTE]` and friends | GitHub alerts: colored bar plus a Note / Tip / Important / Warning / Caution label |

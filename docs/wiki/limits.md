@@ -17,7 +17,6 @@ What mu deliberately leaves out, what it doesn't do yet, and how fast it is.
 - Only validated absolute HTTP(S)/mailto document links emit OSC 8, with URI payloads bounded to 8192 encoded bytes. Relative links outside EPUB, local files and unsupported/unsafe targets stay non-actionable; source/code/data URLs are not auto-linkified.
 - URI authority validation is structural, not DNS/IDNA or mailbox verification. Scoped IPv6 and IPvFuture literals conservatively retain printed fallback, as do destinations containing a replacement character after parser/UTF-8 repair.
 - Definition lists, math and wiki links aren't enabled in Markdown; they render as plain text.
-- In ordered lists that cross into two-digit numbers, items 10+ indent their wrapped lines one column further than items 1–9.
 - A table with too many columns to fit at 3 columns each (10 for CSV and TSV) overflows the width rather than becoming unreadable. The pager scrolls it sideways.
 - Very deep nesting stops shrinking content below 16 columns and overflows instead.
 

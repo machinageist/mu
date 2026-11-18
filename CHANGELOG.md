@@ -4,6 +4,9 @@ All notable changes to mu are recorded here. The format follows [Keep a Changelo
 
 ## Unreleased
 
+### Fixed
+- Ordered-list item text and wrapped lines stay aligned when numbering crosses a digit boundary
+
 ## 0.9.1 - 2026-11-16
 
 ### Fixed

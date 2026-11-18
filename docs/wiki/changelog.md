@@ -15,6 +15,8 @@ Changes since 0.9.1, not yet in a release.
 
 ### Fixed {#unreleased-fixed}
 
+- Ordered-list item text and wrapped lines stay aligned when numbering crosses a digit boundary
+
 ## 0.9.1 · 2026-11-16 {#v0-9-1}
 
 ### Fixed {#v0-9-1-fixed}
